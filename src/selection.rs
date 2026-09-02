@@ -150,6 +150,11 @@ enum Expr {
     Predicate(Predicate),
     Protein,
     Backbone,
+    Water,
+    Nucleic,
+    NucleicBackbone,
+    NucleicBase,
+    NucleicSugar,
     Around {
         cutoff: FloatValue,
         selection: Box<Self>,
@@ -188,6 +193,45 @@ impl Expr {
                     .iter()
                     .any(|name| atom.resname() == *name)
                     && matches!(atom.name(), "N" | "CA" | "C" | "O")
+            }
+            Self::Water => water_resnames().iter().any(|name| atom.resname() == *name),
+            Self::Nucleic => nucleic_resnames()
+                .iter()
+                .any(|name| atom.resname() == *name),
+            Self::NucleicBackbone => {
+                nucleic_resnames()
+                    .iter()
+                    .any(|name| atom.resname() == *name)
+                    && matches!(atom.name(), "P" | "C5'" | "C3'" | "O3'" | "O5'")
+            }
+            Self::NucleicBase => {
+                nucleic_resnames()
+                    .iter()
+                    .any(|name| atom.resname() == *name)
+                    && matches!(
+                        atom.name(),
+                        "N9" | "N7"
+                            | "C8"
+                            | "C5"
+                            | "C4"
+                            | "N3"
+                            | "C2"
+                            | "N1"
+                            | "C6"
+                            | "O6"
+                            | "N2"
+                            | "N6"
+                            | "O2"
+                            | "N4"
+                            | "O4"
+                            | "C5M"
+                    )
+            }
+            Self::NucleicSugar => {
+                nucleic_resnames()
+                    .iter()
+                    .any(|name| atom.resname() == *name)
+                    && matches!(atom.name(), "C1'" | "C2'" | "C3'" | "C4'" | "O4'")
             }
             Self::Around { cutoff, selection } => {
                 if selection.matches(atom, atoms) {
@@ -415,6 +459,21 @@ fn protein_resnames() -> &'static [&'static str] {
         "NASP", "NLYS", "NPRO", "NCYS", "NCYX", "NMET", "CALA", "CGLY", "CSER", "CTHR", "CLEU",
         "CILE", "CVAL", "CASF", "CASN", "CGLN", "CARG", "CHID", "CHIE", "CHIP", "CTRP", "CPHE",
         "CTYR", "CGLU", "CASP", "CLYS", "CPRO", "CCYS", "CCYX", "CMET", "CME", "ASF",
+    ]
+}
+
+fn water_resnames() -> &'static [&'static str] {
+    &[
+        "H2O", "HOH", "OH2", "HHO", "OHH", "T3P", "T4P", "T5P", "SOL", "WAT", "TIP", "TIP2",
+        "TIP3", "TIP4",
+    ]
+}
+
+fn nucleic_resnames() -> &'static [&'static str] {
+    &[
+        "ADE", "URA", "CYT", "GUA", "THY", "DA", "DC", "DG", "DT", "RA", "RU", "RG", "RC", "A",
+        "T", "U", "C", "G", "DA5", "DC5", "DG5", "DT5", "DA3", "DC3", "DG3", "DT3", "RA5", "RU5",
+        "RG5", "RC5", "RA3", "RU3", "RG3", "RC3",
     ]
 }
 
@@ -707,6 +766,11 @@ fn is_selection_keyword(value: &str) -> bool {
             | "not"
             | "protein"
             | "backbone"
+            | "water"
+            | "nucleic"
+            | "nucleicbackbone"
+            | "nucleicbase"
+            | "nucleicsugar"
             | "global"
             | "byres"
             | "name"
@@ -825,6 +889,11 @@ impl Parser {
             "none" => Ok(Expr::None),
             "protein" => Ok(Expr::Protein),
             "backbone" => Ok(Expr::Backbone),
+            "water" => Ok(Expr::Water),
+            "nucleic" => Ok(Expr::Nucleic),
+            "nucleicbackbone" => Ok(Expr::NucleicBackbone),
+            "nucleicbase" => Ok(Expr::NucleicBase),
+            "nucleicsugar" => Ok(Expr::NucleicSugar),
             "global" => Ok(Expr::Global(Box::new(self.parse_unary()?))),
             "byres" => Ok(Expr::ByRes(Box::new(self.parse_unary()?))),
             "name" => Ok(Expr::Predicate(Predicate::Name(
@@ -1253,6 +1322,8 @@ mod tests {
         let atoms = atoms();
         assert_eq!(select(&atoms, "protein").unwrap().len(), 2);
         assert_eq!(select(&atoms, "backbone").unwrap().len(), 2);
+        assert_eq!(select(&atoms, "water").unwrap().len(), 1);
+        assert_eq!(select(&atoms, "nucleic").unwrap().len(), 0);
         assert_eq!(select(&atoms, "type CT1").unwrap().len(), 1);
         assert_eq!(select(&atoms, "name CA N").unwrap().len(), 2);
         assert_eq!(select(&atoms, "resid 1 8").unwrap().len(), 3);
