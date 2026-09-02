@@ -1,6 +1,7 @@
 //! Core topology and trajectory objects.
 
-use crate::pdb::{PdbAtom, read_pdb};
+use crate::coordinates::CoordinateFile;
+use crate::pdb::{PdbAtom, PdbStructure, read_pdb};
 use crate::selection::{AtomLike, SelectionError, select};
 use std::path::Path;
 
@@ -437,7 +438,102 @@ impl Universe {
             universe.trajectory =
                 Trajectory::new(structure.frames.into_iter().map(Frame::new).collect());
         }
+        if let Some(cell) = structure.cryst1 {
+            let dimensions = [cell.a, cell.b, cell.c, cell.alpha, cell.beta, cell.gamma];
+            for frame in &mut universe.trajectory.frames {
+                frame.dimensions = Some(dimensions);
+            }
+        }
         Ok(universe)
+    }
+
+    /// Construct a universe from a text XYZ file.
+    pub fn from_xyz(path: impl AsRef<Path>) -> crate::Result<Self> {
+        Self::from_coordinate_file(CoordinateFile::read_xyz(std::fs::File::open(path)?)?)
+    }
+
+    /// Construct a universe from a Gromacs GRO file. Coordinates retain the
+    /// nanometre units used by GRO; callers can convert with [`crate::units`].
+    pub fn from_gro(path: impl AsRef<Path>) -> crate::Result<Self> {
+        Self::from_coordinate_file(CoordinateFile::read_gro(std::fs::File::open(path)?)?)
+    }
+
+    fn from_coordinate_file(file: CoordinateFile) -> crate::Result<Self> {
+        let first = file.frames.first().ok_or_else(|| {
+            crate::Error::InvalidInput("coordinate file has no frames".to_string())
+        })?;
+        let mut atoms = Vec::with_capacity(first.n_atoms());
+        for index in 0..first.n_atoms() {
+            let name = first
+                .names
+                .get(index)
+                .filter(|name| !name.is_empty())
+                .map_or("X", String::as_str);
+            let mut atom = Atom::new(index, name, first.positions[index]);
+            if let Some(resname) = first.residue_names.get(index) {
+                atom.resname = resname.clone();
+            }
+            if let Some(resid) = first.residue_ids.get(index) {
+                atom.resid = *resid;
+            }
+            atom.element = infer_element(name);
+            atoms.push(atom);
+        }
+        let topology = Topology::new(atoms);
+        let frames = file
+            .frames
+            .into_iter()
+            .map(|frame| {
+                let mut result = Frame::new(frame.positions);
+                result.velocities = frame.velocities;
+                result.dimensions = frame.dimensions;
+                result
+            })
+            .collect();
+        Ok(Self {
+            topology,
+            trajectory: Trajectory::new(frames),
+        })
+    }
+
+    /// Write the current topology and all trajectory frames as a PDB file.
+    pub fn write_pdb(&self, path: impl AsRef<Path>) -> crate::Result<()> {
+        let atoms = self
+            .topology
+            .atoms
+            .iter()
+            .enumerate()
+            .map(|(index, atom)| PdbAtom {
+                serial: u32::try_from(index + 1).unwrap_or(u32::MAX),
+                name: atom.name.clone(),
+                alt_loc: None,
+                residue_name: atom.resname.clone(),
+                chain_id: atom.chain_id.chars().next(),
+                residue_sequence: atom.resid,
+                insertion_code: None,
+                x: atom.position[0],
+                y: atom.position[1],
+                z: atom.position[2],
+                occupancy: atom.occupancy,
+                temperature_factor: atom.temp_factor,
+                element: atom.element.clone(),
+                charge: None,
+                hetatm: false,
+            })
+            .collect();
+        let frames = self
+            .trajectory
+            .frames
+            .iter()
+            .map(|frame| frame.positions.clone())
+            .collect();
+        PdbStructure {
+            atoms,
+            frames,
+            cryst1: None,
+        }
+        .write_file(path)?;
+        Ok(())
     }
 
     pub fn atoms(&self) -> AtomGroup {
@@ -479,6 +575,21 @@ impl Universe {
             .or_else(|| self.trajectory.frames.first())
             .map(|frame| frame.positions.clone())
             .unwrap_or_default()
+    }
+}
+
+fn infer_element(name: &str) -> Option<String> {
+    let letters: String = name.chars().filter(char::is_ascii_alphabetic).collect();
+    if letters.is_empty() {
+        None
+    } else {
+        Some(
+            letters
+                .chars()
+                .take(2)
+                .collect::<String>()
+                .to_ascii_uppercase(),
+        )
     }
 }
 
