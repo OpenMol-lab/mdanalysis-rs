@@ -477,6 +477,11 @@ impl Universe {
                 atom.resid = *resid;
             }
             atom.element = infer_element(name);
+            atom.mass = atom
+                .element
+                .as_deref()
+                .and_then(element_mass)
+                .unwrap_or(0.0);
             atoms.push(atom);
         }
         let topology = Topology::new(atoms);
@@ -583,13 +588,16 @@ fn infer_element(name: &str) -> Option<String> {
     if letters.is_empty() {
         None
     } else {
-        Some(
-            letters
-                .chars()
-                .take(2)
-                .collect::<String>()
-                .to_ascii_uppercase(),
-        )
+        let upper = letters.to_ascii_uppercase();
+        let two_letter = matches!(
+            upper.as_str(),
+            "CL" | "BR" | "NA" | "MG" | "FE" | "ZN" | "CU" | "MN" | "LI" | "SI"
+        );
+        Some(if two_letter {
+            upper.chars().take(2).collect()
+        } else {
+            upper.chars().take(1).collect()
+        })
     }
 }
 
