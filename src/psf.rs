@@ -154,7 +154,6 @@ impl PsfStructure {
                 if index != 0 {
                     writeln!(writer)?;
                 }
-                write!(writer, "")?;
             }
             write!(writer, "{:>8}{:>8}", bond.atom1, bond.atom2)?;
         }
@@ -227,7 +226,7 @@ struct Section {
 
 fn parse_psf(input: &str) -> Result<PsfStructure, PsfError> {
     let lines: Vec<&str> = input.lines().collect();
-    let atom_section = find_section(&lines, "NATOM")?.ok_or_else(|| PsfError::Parse {
+    let atom_section = find_section(&lines, "NATOM").ok_or_else(|| PsfError::Parse {
         line: 1,
         message: "missing !NATOM section".to_string(),
     })?;
@@ -259,7 +258,7 @@ fn parse_psf(input: &str) -> Result<PsfStructure, PsfError> {
         });
     }
 
-    let bond_section = find_section(&lines, "NBOND")?;
+    let bond_section = find_section(&lines, "NBOND");
     let bonds = if let Some(section) = bond_section {
         parse_bonds(&lines, section)?
     } else {
@@ -271,7 +270,7 @@ fn parse_psf(input: &str) -> Result<PsfStructure, PsfError> {
     Ok(structure)
 }
 
-fn find_section(lines: &[&str], wanted: &str) -> Result<Option<Section>, PsfError> {
+fn find_section(lines: &[&str], wanted: &str) -> Option<Section> {
     let mut sections = Vec::new();
     for (index, line) in lines.iter().enumerate() {
         if let Some((count, marker)) = section_marker(line) {
@@ -284,15 +283,15 @@ fn find_section(lines: &[&str], wanted: &str) -> Result<Option<Section>, PsfErro
             let end = sections
                 .get(position + 1)
                 .map_or(lines.len(), |next| next.0);
-            return Ok(Some(Section {
+            return Some(Section {
                 count: *count,
                 line: *index + 1,
                 start: *index + 1,
                 end,
-            }));
+            });
         }
     }
-    Ok(None)
+    None
 }
 
 fn section_marker(line: &str) -> Option<(usize, &str)> {
