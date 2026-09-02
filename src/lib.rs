@@ -15,6 +15,7 @@ pub mod distances;
 pub mod formats;
 pub mod geometry;
 pub mod guesser;
+pub mod lammps;
 pub mod mdamath;
 pub mod neighbor_search;
 pub mod pdb;
@@ -55,6 +56,10 @@ pub use geometry::{
     self_distance_array, weighted_rmsd,
 };
 pub use guesser::{Guesser, GuesserError, guess_bonds, guess_element, guess_mass};
+pub use lammps::{
+    LammpsAtom, LammpsBond, LammpsBox, LammpsData, LammpsDataFile, LammpsError, read_lammps_data,
+    write_lammps_data,
+};
 pub use mdamath::{angle, box_volume, dihedral, norm, triclinic_box, triclinic_vectors};
 pub use neighbor_search::{
     AtomNeighborSearch, NeighborPairs, NeighborSearch, NeighborSearchError, PeriodicKDTree,
@@ -78,6 +83,7 @@ pub enum Error {
     Xdr(xdr::XdrError),
     Pdb(PdbError),
     Pdbqt(pdbqt::PdbqtError),
+    Lammps(lammps::LammpsError),
     Psf(PsfError),
     Dcd(dcd::DcdError),
     Coordinate(CoordinateError),
@@ -96,6 +102,7 @@ impl std::fmt::Display for Error {
             Self::Xdr(error) => write!(f, "XDR trajectory error: {error}"),
             Self::Pdb(error) => write!(f, "PDB error: {error}"),
             Self::Pdbqt(error) => write!(f, "PDBQT error: {error}"),
+            Self::Lammps(error) => write!(f, "LAMMPS DATA error: {error}"),
             Self::Psf(error) => write!(f, "PSF error: {error}"),
             Self::Dcd(error) => write!(f, "DCD error: {error}"),
             Self::Coordinate(error) => write!(f, "coordinate error: {error}"),
@@ -137,6 +144,12 @@ impl From<PdbError> for Error {
 impl From<pdbqt::PdbqtError> for Error {
     fn from(error: pdbqt::PdbqtError) -> Self {
         Self::Pdbqt(error)
+    }
+}
+
+impl From<lammps::LammpsError> for Error {
+    fn from(error: lammps::LammpsError) -> Self {
+        Self::Lammps(error)
     }
 }
 
