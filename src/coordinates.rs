@@ -432,6 +432,15 @@ fn write_gro_document<W: Write>(
                 index + 1
             )));
         }
+        if position
+            .iter()
+            .any(|value| *value <= -999.9995 || *value > 9_999.9995)
+        {
+            return Err(CoordinateError::InvalidStructure(format!(
+                "GRO atom {} coordinate is outside the representable range",
+                index + 1
+            )));
+        }
         let residue_id = frame
             .residue_ids
             .get(index)
@@ -837,6 +846,17 @@ mod tests {
         );
         let parsed = CoordinateFile::from_gro_str(&text).unwrap();
         assert_eq!(parsed.frames[0].dimensions.unwrap()[..3], [0.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn gro_writer_rejects_coordinates_that_overflow_fixed_fields() {
+        let file = CoordinateFile::new(vec![CoordinateFrame::new(vec![[10_000.0, 0.0, 0.0]])]);
+        let error = file.to_gro_string().unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("outside the representable range")
+        );
     }
 
     #[test]
