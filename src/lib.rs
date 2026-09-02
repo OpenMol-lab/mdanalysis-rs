@@ -30,9 +30,10 @@ pub use coordinates::{read_gro, read_xyz, write_gro, write_xyz};
 pub use core::{Atom, AtomGroup, Bond, Frame, Residue, Segment, Topology, Trajectory, Universe};
 pub use dcd::{DcdEndian, DcdError, DcdFile, DcdHeader, DcdWriteOptions, read_dcd, write_dcd};
 pub use distances::{
-    DistanceError, PairDistances, calc_angle, calc_angles, calc_bond, calc_bonds, calc_dihedral,
-    calc_dihedrals, capped_distance, distance_array as coordinate_distance_array,
-    self_capped_distance, self_distance_array as coordinate_self_distance_array,
+    DistanceError, PairDistances, apply_pbc, calc_angle, calc_angles, calc_bond, calc_bonds,
+    calc_dihedral, calc_dihedrals, capped_distance, distance_array as coordinate_distance_array,
+    minimize_vectors, minimum_image_triclinic, self_capped_distance,
+    self_distance_array as coordinate_self_distance_array, transform_r_to_s, transform_s_to_r,
 };
 pub use formats::{
     FormatAtom, FormatBond, FormatError, Structure, read_crd, read_mol2, read_pqr, write_crd,

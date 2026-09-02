@@ -3,11 +3,14 @@
 //! The API in this module mirrors the array-oriented part of
 //! `MDAnalysis.lib.distances` while keeping the coordinate representation
 //! lightweight: one point is an `[f64; 3]`, and a collection is a slice of
-//! those points.  Angles and dihedrals are returned in radians.  Periodic
-//! boundary conditions currently support orthorhombic boxes represented by
-//! their three positive lengths.
+//! those points.  Angles and dihedrals are returned in radians.  Pairwise
+//! routines support orthorhombic boxes represented by their three positive
+//! lengths; the explicit triclinic helpers accept the usual six box
+//! dimensions `[a, b, c, alpha, beta, gamma]`.
 
 use std::fmt;
+
+use crate::geometry::{Matrix3, Vec3};
 
 /// A point in Cartesian space.
 pub type Coordinate = [f64; 3];
@@ -27,6 +30,8 @@ pub enum DistanceError {
     },
     /// A periodic box must contain finite, strictly positive lengths.
     InvalidBox(Coordinate),
+    /// A triclinic box must contain finite positive lengths and angles.
+    InvalidTriclinicBox([f64; 6]),
     /// A cutoff is not finite or is negative.
     InvalidCutoff(f64),
     /// The lower cutoff is larger than the upper cutoff.
@@ -47,6 +52,10 @@ impl fmt::Display for DistanceError {
             Self::InvalidBox(lengths) => write!(
                 formatter,
                 "orthorhombic box lengths must be finite and positive (got {lengths:?})"
+            ),
+            Self::InvalidTriclinicBox(dimensions) => write!(
+                formatter,
+                "triclinic box dimensions are invalid (got {dimensions:?})"
             ),
             Self::InvalidCutoff(cutoff) => {
                 write!(
@@ -265,6 +274,60 @@ pub fn self_capped_distance(
     Ok(PairDistances { pairs, distances })
 }
 
+/// Convert Cartesian positions to fractional unit-cell coordinates.
+pub fn transform_r_to_s(coordinates: &[[f64; 3]], dimensions: [f64; 6]) -> Result<Vec<Coordinate>> {
+    let matrix = triclinic_matrix(dimensions)?;
+    let inverse = matrix
+        .inverse()
+        .ok_or(DistanceError::InvalidTriclinicBox(dimensions))?;
+    Ok(coordinates
+        .iter()
+        .map(|&coordinate| (inverse * Vec3::from(coordinate)).to_array())
+        .collect())
+}
+
+/// Convert fractional unit-cell coordinates to Cartesian positions.
+pub fn transform_s_to_r(coordinates: &[[f64; 3]], dimensions: [f64; 6]) -> Result<Vec<Coordinate>> {
+    let matrix = triclinic_matrix(dimensions)?;
+    Ok(coordinates
+        .iter()
+        .map(|&coordinate| (matrix * Vec3::from(coordinate)).to_array())
+        .collect())
+}
+
+/// Move Cartesian positions into the primary triclinic unit cell.
+pub fn apply_pbc(coordinates: &[[f64; 3]], dimensions: [f64; 6]) -> Result<Vec<Coordinate>> {
+    let fractional = transform_r_to_s(coordinates, dimensions)?;
+    let wrapped: Vec<Coordinate> = fractional
+        .into_iter()
+        .map(|coordinate| {
+            [
+                coordinate[0].rem_euclid(1.0),
+                coordinate[1].rem_euclid(1.0),
+                coordinate[2].rem_euclid(1.0),
+            ]
+        })
+        .collect();
+    transform_s_to_r(&wrapped, dimensions)
+}
+
+/// Apply the triclinic minimum-image convention to a collection of vectors.
+pub fn minimize_vectors(vectors: &[[f64; 3]], dimensions: [f64; 6]) -> Result<Vec<Coordinate>> {
+    let matrix = triclinic_matrix(dimensions)?;
+    let inverse = matrix
+        .inverse()
+        .ok_or(DistanceError::InvalidTriclinicBox(dimensions))?;
+    Ok(vectors
+        .iter()
+        .map(|&vector| minimize_triclinic_vector(vector, matrix, inverse))
+        .collect())
+}
+
+/// Apply the triclinic minimum-image convention to one vector.
+pub fn minimum_image_triclinic(vector: Coordinate, dimensions: [f64; 6]) -> Result<Coordinate> {
+    Ok(minimize_vectors(&[vector], dimensions)?[0])
+}
+
 fn ensure_same_len(operation: &'static str, expected: usize, found: usize) -> Result<()> {
     (expected == found)
         .then_some(())
@@ -288,6 +351,107 @@ fn valid_box(box_lengths: Option<Coordinate>) -> Result<Option<Coordinate>> {
             }
         })
         .transpose()
+}
+
+fn triclinic_matrix(dimensions: [f64; 6]) -> Result<Matrix3> {
+    let [a, b, c, alpha, beta, gamma] = dimensions;
+    if [a, b, c, alpha, beta, gamma]
+        .iter()
+        .any(|value| !value.is_finite())
+        || a <= 0.0
+        || b <= 0.0
+        || c <= 0.0
+        || !(0.0 < alpha
+            && alpha < 180.0
+            && 0.0 < beta
+            && beta < 180.0
+            && 0.0 < gamma
+            && gamma < 180.0)
+    {
+        return Err(DistanceError::InvalidTriclinicBox(dimensions));
+    }
+    let vectors = crate::mdamath::triclinic_vectors(dimensions);
+    let matrix = Matrix3::from_cols([
+        Vec3::from(vectors[0]),
+        Vec3::from(vectors[1]),
+        Vec3::from(vectors[2]),
+    ]);
+    matrix
+        .inverse()
+        .map(|_| matrix)
+        .ok_or(DistanceError::InvalidTriclinicBox(dimensions))
+}
+
+/// Find the shortest image of one Cartesian vector in an upper-triangular
+/// triclinic lattice.  Rounding each fractional component independently is a
+/// useful starting point, but is not exact for skewed cells because lattice
+/// vectors are not orthogonal.  The recursive search below enumerates only
+/// integer candidates that can improve that starting distance, using the
+/// triangular form to prune the search from z to x.
+fn minimize_triclinic_vector(vector: Coordinate, matrix: Matrix3, inverse: Matrix3) -> Coordinate {
+    let vector = Vec3::from(vector);
+    if !vector.x.is_finite() || !vector.y.is_finite() || !vector.z.is_finite() {
+        return vector.to_array();
+    }
+    let fractional = inverse * vector;
+    let rounded = Vec3::new(
+        fractional.x.round(),
+        fractional.y.round(),
+        fractional.z.round(),
+    );
+    let mut best = vector - matrix * rounded;
+    let mut best_squared = best.norm_squared();
+    if !best_squared.is_finite() {
+        return best.to_array();
+    }
+
+    let ax = matrix.m[0][0];
+    let bx = matrix.m[0][1];
+    let cx = matrix.m[0][2];
+    let by = matrix.m[1][1];
+    let cy = matrix.m[1][2];
+    let cz = matrix.m[2][2];
+    // A valid triclinic matrix has positive diagonal entries.  The checks in
+    // `triclinic_matrix` also reject singular matrices, so these divisions
+    // are safe here.
+    let tolerance = 1.0e-12 * (1.0 + best_squared);
+    let z_min = ((vector.z - (best_squared + tolerance).sqrt()) / cz).ceil() as i64;
+    let z_max = ((vector.z + (best_squared + tolerance).sqrt()) / cz).floor() as i64;
+    for z_index in z_min..=z_max {
+        let z = z_index as f64;
+        let residual_z = vector.z - cz * z;
+        let remaining_y = best_squared - residual_z * residual_z;
+        if remaining_y < -tolerance {
+            continue;
+        }
+        let y_radius = remaining_y.max(0.0).sqrt();
+        let y_center = (vector.y - cy * z) / by;
+        let y_min = ((y_center * by - y_radius) / by).ceil() as i64;
+        let y_max = ((y_center * by + y_radius) / by).floor() as i64;
+        for y_index in y_min..=y_max {
+            let y = y_index as f64;
+            let residual_y = vector.y - cy * z - by * y;
+            let remaining_x = remaining_y - residual_y * residual_y;
+            if remaining_x < -tolerance {
+                continue;
+            }
+            let x_radius = remaining_x.max(0.0).sqrt();
+            let x_center = (vector.x - cx * z - bx * y) / ax;
+            let x_min = ((x_center * ax - x_radius) / ax).ceil() as i64;
+            let x_max = ((x_center * ax + x_radius) / ax).floor() as i64;
+            for x_index in x_min..=x_max {
+                let x = x_index as f64;
+                let candidate =
+                    Vec3::new(vector.x - ax * x - bx * y - cx * z, residual_y, residual_z);
+                let candidate_squared = candidate.norm_squared();
+                if candidate_squared + tolerance < best_squared {
+                    best_squared = candidate_squared;
+                    best = candidate;
+                }
+            }
+        }
+    }
+    best.to_array()
 }
 
 fn validate_cutoffs(
@@ -485,5 +649,48 @@ mod tests {
             self_capped_distance(&[], 1.0, Some(2.0), None),
             Err(DistanceError::CutoffOrder { min: 2.0, max: 1.0 })
         );
+        assert!(matches!(
+            transform_r_to_s(&[], [1.0, 1.0, 1.0, 0.0, 90.0, 90.0]),
+            Err(DistanceError::InvalidTriclinicBox(_))
+        ));
+    }
+
+    #[test]
+    fn triclinic_coordinate_transforms_and_minimum_image() {
+        let dimensions = [10.0, 11.0, 12.0, 90.0, 80.0, 70.0];
+        let fractional = [[0.2, 1.25, -0.4], [0.75, 0.5, 0.1]];
+        let cartesian = transform_s_to_r(&fractional, dimensions).unwrap();
+        let round_trip = transform_r_to_s(&cartesian, dimensions).unwrap();
+        for (actual, expected) in round_trip.iter().zip(fractional) {
+            for axis in 0..3 {
+                assert!((actual[axis] - expected[axis]).abs() < 1.0e-10);
+            }
+        }
+        let wrapped = apply_pbc(&cartesian, dimensions).unwrap();
+        let wrapped_fractional = transform_r_to_s(&wrapped, dimensions).unwrap();
+        for coordinate in wrapped_fractional {
+            assert!(coordinate.iter().all(|value| (0.0..1.0).contains(value)));
+        }
+        let image = minimum_image_triclinic(cartesian[0], dimensions).unwrap();
+        let image_fractional = transform_r_to_s(&[image], dimensions).unwrap()[0];
+        assert!(
+            image_fractional
+                .iter()
+                .all(|value| (-0.5..=0.5).contains(value))
+        );
+    }
+
+    #[test]
+    fn triclinic_minimum_image_handles_skewed_lattice() {
+        let dimensions = [10.0, 10.0, 10.0, 90.0, 90.0, 5.0];
+        let vector = transform_s_to_r(&[[0.49, 0.49, 0.0]], dimensions).unwrap()[0];
+        let minimized = minimum_image_triclinic(vector, dimensions).unwrap();
+        // Independent fractional rounding would retain this vector's nearly
+        // full cell length.  The nearest image subtracts the a vector.
+        assert!(norm(minimized) < 1.0);
+        let expected = transform_s_to_r(&[[-0.51, 0.49, 0.0]], dimensions).unwrap()[0];
+        for axis in 0..3 {
+            assert!((minimized[axis] - expected[axis]).abs() < 1.0e-10);
+        }
     }
 }
