@@ -7,6 +7,49 @@
 
 use crate::geometry::{Matrix3, Vec3, center_of_mass};
 
+/// Errors returned by frame-level coordinate transformations.
+#[derive(Clone, Debug, PartialEq)]
+pub enum TransformationError {
+    /// The requested atom index is not present in the frame.
+    AtomIndexOutOfBounds { index: usize, count: usize },
+    /// A coordinate-dependent operation was requested without a unit cell.
+    MissingDimensions,
+    /// The supplied dimensions are not a valid six-component unit cell.
+    InvalidDimensions([f64; 6]),
+    /// Per-atom metadata does not have the same length as the frame.
+    LengthMismatch { expected: usize, found: usize },
+    /// A point, direction, or weight vector was invalid.
+    InvalidVector(&'static str),
+}
+
+impl std::fmt::Display for TransformationError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::AtomIndexOutOfBounds { index, count } => {
+                write!(
+                    formatter,
+                    "atom index {index} is out of bounds for {count} coordinates"
+                )
+            }
+            Self::MissingDimensions => {
+                formatter.write_str("transformation requires unit-cell dimensions")
+            }
+            Self::InvalidDimensions(dimensions) => {
+                write!(formatter, "invalid unit-cell dimensions {dimensions:?}")
+            }
+            Self::LengthMismatch { expected, found } => {
+                write!(
+                    formatter,
+                    "transformation expected {expected} values, found {found}"
+                )
+            }
+            Self::InvalidVector(name) => write!(formatter, "{name} must be finite and non-zero"),
+        }
+    }
+}
+
+impl std::error::Error for TransformationError {}
+
 /// Return the 3x3 Rodrigues rotation matrix for an axis and angle.
 ///
 /// `angle` is in radians.  A zero-length axis has no well-defined direction;
@@ -298,6 +341,203 @@ pub fn minimum_image(displacement: Vec3, box_lengths: Vec3) -> Vec3 {
     )
 }
 
+/// Set one frame's unit-cell dimensions in `[a, b, c, alpha, beta, gamma]`
+/// form.  The values are copied into the frame and are not normalized.
+pub fn set_dimensions(
+    frame: &mut crate::core::Frame,
+    dimensions: [f64; 6],
+) -> Result<(), TransformationError> {
+    validate_dimensions(dimensions)?;
+    frame.dimensions = Some(dimensions);
+    Ok(())
+}
+
+/// Set dimensions for every frame.  A single dimensions vector is reused for
+/// all frames; otherwise one vector must be supplied per frame.
+pub fn set_dimensions_for_frames(
+    frames: &mut [crate::core::Frame],
+    dimensions: &[[f64; 6]],
+) -> Result<(), TransformationError> {
+    if dimensions.len() != 1 && dimensions.len() != frames.len() {
+        return Err(TransformationError::LengthMismatch {
+            expected: frames.len(),
+            found: dimensions.len(),
+        });
+    }
+    for (index, frame) in frames.iter_mut().enumerate() {
+        let dimensions = dimensions[if dimensions.len() == 1 { 0 } else { index }];
+        set_dimensions(frame, dimensions)?;
+    }
+    Ok(())
+}
+
+/// Translate all positions in a frame.  Velocities and forces are unchanged.
+pub fn translate_frame(frame: &mut crate::core::Frame, offset: Vec3) {
+    for position in &mut frame.positions {
+        *position = (Vec3::from(*position) + offset).to_array();
+    }
+}
+
+/// Rotate positions, velocities, and forces in a frame around an arbitrary
+/// axis through `origin`.  `angle` is in radians.
+pub fn rotate_frame(
+    frame: &mut crate::core::Frame,
+    angle: f64,
+    direction: Vec3,
+    origin: Vec3,
+) -> Result<(), TransformationError> {
+    if !direction.x.is_finite()
+        || !direction.y.is_finite()
+        || !direction.z.is_finite()
+        || direction.norm_squared() <= f64::EPSILON
+    {
+        return Err(TransformationError::InvalidVector("direction"));
+    }
+    if !origin.x.is_finite() || !origin.y.is_finite() || !origin.z.is_finite() || !angle.is_finite()
+    {
+        return Err(TransformationError::InvalidVector("rotation origin/angle"));
+    }
+    let rotation = rotation_matrix(angle, direction);
+    for position in &mut frame.positions {
+        *position = (origin + rotation * (Vec3::from(*position) - origin)).to_array();
+    }
+    if let Some(velocities) = &mut frame.velocities {
+        for velocity in velocities {
+            *velocity = (rotation * Vec3::from(*velocity)).to_array();
+        }
+    }
+    if let Some(forces) = &mut frame.forces {
+        for force in forces {
+            *force = (rotation * Vec3::from(*force)).to_array();
+        }
+    }
+    Ok(())
+}
+
+/// Centre selected frame coordinates at a point or at the centre of its unit
+/// cell.  `masses`, when supplied, must match `atom_indices` and selects a
+/// mass-weighted centre; `None` uses the geometric centre.  When `wrap` is
+/// true, selected positions are wrapped into the primary triclinic cell before
+/// calculating the centre, without changing unselected positions.
+pub fn center_in_box(
+    frame: &mut crate::core::Frame,
+    atom_indices: &[usize],
+    masses: Option<&[f64]>,
+    point: Option<Vec3>,
+    wrap: bool,
+) -> Result<(), TransformationError> {
+    if atom_indices.is_empty() {
+        return Err(TransformationError::InvalidVector("atom_indices"));
+    }
+    if let Some(masses) = masses
+        && masses.len() != atom_indices.len()
+    {
+        return Err(TransformationError::LengthMismatch {
+            expected: atom_indices.len(),
+            found: masses.len(),
+        });
+    }
+    let dimensions = frame.dimensions;
+    if let Some(dimensions) = dimensions {
+        validate_dimensions(dimensions)?;
+    }
+    let lattice = dimensions.map(|dimensions| {
+        let vectors = crate::mdamath::triclinic_vectors(dimensions);
+        Matrix3::from_cols([
+            Vec3::from(vectors[0]),
+            Vec3::from(vectors[1]),
+            Vec3::from(vectors[2]),
+        ])
+    });
+    let mut selected = Vec::with_capacity(atom_indices.len());
+    for &index in atom_indices {
+        let position =
+            *frame
+                .positions
+                .get(index)
+                .ok_or(TransformationError::AtomIndexOutOfBounds {
+                    index,
+                    count: frame.positions.len(),
+                })?;
+        let position = if wrap {
+            let lattice = lattice.ok_or(TransformationError::MissingDimensions)?;
+            let inverse = lattice
+                .inverse()
+                .ok_or(TransformationError::InvalidDimensions(
+                    dimensions.unwrap_or_default(),
+                ))?;
+            let fractional = inverse * Vec3::from(position);
+            (lattice
+                * Vec3::new(
+                    fractional.x.rem_euclid(1.0),
+                    fractional.y.rem_euclid(1.0),
+                    fractional.z.rem_euclid(1.0),
+                ))
+            .to_array()
+        } else {
+            position
+        };
+        selected.push(Vec3::from(position));
+    }
+    let center = if let Some(masses) = masses {
+        if masses.iter().any(|mass| !mass.is_finite() || *mass < 0.0) {
+            return Err(TransformationError::InvalidVector("masses"));
+        }
+        let total: f64 = masses.iter().sum();
+        if total <= f64::EPSILON {
+            return Err(TransformationError::InvalidVector("masses"));
+        }
+        selected
+            .iter()
+            .zip(masses)
+            .fold(Vec3::ZERO, |sum, (position, mass)| sum + *position * *mass)
+            / total
+    } else {
+        selected
+            .iter()
+            .copied()
+            .fold(Vec3::ZERO, |sum, position| sum + position)
+            / selected.len() as f64
+    };
+    let target = if let Some(point) = point {
+        if !point.x.is_finite() || !point.y.is_finite() || !point.z.is_finite() {
+            return Err(TransformationError::InvalidVector("point"));
+        }
+        point
+    } else {
+        let lattice = lattice.ok_or(TransformationError::MissingDimensions)?;
+        (lattice * Vec3::splat(0.5)).to_array().into()
+    };
+    translate_frame(frame, target - center);
+    Ok(())
+}
+
+/// Unwrap a selected sequence using triclinic minimum-image displacements.
+/// The first selected position is retained and each following position is
+/// shifted to the nearest image relative to its predecessor.
+pub fn unwrap_positions_triclinic(
+    coordinates: &mut [Vec3],
+    dimensions: [f64; 6],
+) -> Result<(), TransformationError> {
+    validate_dimensions(dimensions)?;
+    if coordinates.len() < 2 {
+        return Ok(());
+    }
+    for index in 1..coordinates.len() {
+        let displacement = coordinates[index] - coordinates[index - 1];
+        let image = crate::distances::minimum_image_triclinic(displacement.to_array(), dimensions)
+            .map_err(|_| TransformationError::InvalidDimensions(dimensions))?;
+        coordinates[index] = coordinates[index - 1] + Vec3::from(image);
+    }
+    Ok(())
+}
+
+fn validate_dimensions(dimensions: [f64; 6]) -> Result<(), TransformationError> {
+    crate::distances::transform_s_to_r(&[[0.0; 3]], dimensions)
+        .map(|_| ())
+        .map_err(|_| TransformationError::InvalidDimensions(dimensions))
+}
+
 fn wrap_component(value: f64, period: f64) -> f64 {
     if period.is_finite() && period > 0.0 {
         value.rem_euclid(period)
@@ -481,5 +721,50 @@ mod tests {
         assert!((0.0..1.0).contains(&fractional.x));
         assert!((0.0..1.0).contains(&fractional.y));
         assert!((0.0..1.0).contains(&fractional.z));
+    }
+
+    #[test]
+    fn frame_transformations_update_coordinates_and_vectors() {
+        let mut frame = crate::core::Frame::new(vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]]);
+        frame.velocities = Some(vec![[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]);
+        frame.forces = Some(vec![[0.0, 0.0, 1.0], [1.0, 0.0, 0.0]]);
+        translate_frame(&mut frame, Vec3::new(1.0, 2.0, 3.0));
+        rotate_frame(
+            &mut frame,
+            std::f64::consts::FRAC_PI_2,
+            Vec3::new(0.0, 0.0, 1.0),
+            Vec3::new(0.0, 0.0, 0.0),
+        )
+        .unwrap();
+        close(frame.positions[0][0], -2.0);
+        close(frame.positions[0][1], 1.0);
+        close(frame.velocities.as_ref().unwrap()[0][0], 0.0);
+        close(frame.velocities.as_ref().unwrap()[0][1], 1.0);
+        close(frame.forces.as_ref().unwrap()[0][2], 1.0);
+    }
+
+    #[test]
+    fn dimensions_and_center_transformations_validate_and_apply() {
+        let mut frame = crate::core::Frame::new(vec![[0.0, 0.0, 0.0], [2.0, 0.0, 0.0]]);
+        set_dimensions(&mut frame, [10.0, 10.0, 10.0, 90.0, 90.0, 90.0]).unwrap();
+        center_in_box(&mut frame, &[0, 1], None, None, false).unwrap();
+        close(frame.positions[0][0], 4.0);
+        close(frame.positions[1][0], 6.0);
+        assert!(matches!(
+            rotate_frame(&mut frame, 1.0, Vec3::ZERO, Vec3::ZERO),
+            Err(TransformationError::InvalidVector("direction"))
+        ));
+        assert!(matches!(
+            set_dimensions(&mut frame, [0.0; 6]),
+            Err(TransformationError::InvalidDimensions(_))
+        ));
+    }
+
+    #[test]
+    fn triclinic_unwrap_uses_minimum_image() {
+        let dimensions = [10.0, 10.0, 10.0, 90.0, 90.0, 60.0];
+        let mut points = [Vec3::new(9.8, 0.0, 0.0), Vec3::new(0.2, 0.0, 0.0)];
+        unwrap_positions_triclinic(&mut points, dimensions).unwrap();
+        close(points[1].x, 10.2);
     }
 }
