@@ -144,7 +144,16 @@ fn element_mass(element: &str) -> Option<f64> {
         "NA" => Some(22.990),
         "MG" => Some(24.305),
         "CA" => Some(40.078),
+        "LI" => Some(6.94),
+        "AL" => Some(26.982),
+        "SI" => Some(28.085),
+        "K" => Some(39.098),
+        "CR" => Some(51.996),
+        "MN" => Some(54.938),
         "FE" => Some(55.845),
+        "CO" => Some(58.933),
+        "NI" => Some(58.693),
+        "CU" => Some(63.546),
         "ZN" => Some(65.38),
         _ => None,
     }
@@ -1041,6 +1050,17 @@ mod tests {
         assert!(
             matches!(error, crate::Error::InvalidInput(message) if message.contains("PSF contains 1"))
         );
+    }
+
+    #[test]
+    fn pdb_metal_elements_receive_standard_masses() {
+        let pdb = concat!(
+            "HETATM    1 CU    CU A   1       0.000   0.000   0.000  1.00  0.00          Cu  \n",
+            "END\n",
+        );
+        let universe = Universe::from_pdb_str(pdb).unwrap();
+        assert_eq!(universe.topology.atoms[0].element.as_deref(), Some("Cu"));
+        assert!((universe.topology.atoms[0].mass - 63.546).abs() < 1e-6);
     }
 
     #[test]
