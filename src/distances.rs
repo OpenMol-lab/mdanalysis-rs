@@ -69,6 +69,13 @@ impl std::error::Error for DistanceError {}
 /// Result type used by this module.
 pub type Result<T> = std::result::Result<T, DistanceError>;
 
+/// Index pairs and their corresponding distances returned by capped queries.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PairDistances {
+    pub pairs: Vec<(usize, usize)>,
+    pub distances: Vec<f64>,
+}
+
 /// Calculate distances for corresponding pairs of points.
 pub fn calc_bonds(
     first: &[[f64; 3]],
@@ -211,7 +218,7 @@ pub fn self_distance_array(
 /// Return all pairs whose distance is inside a cutoff interval.
 ///
 /// The maximum cutoff is inclusive.  When `min_cutoff` is supplied, the
-/// minimum is inclusive as well.  Returned pairs are in row-major order and
+/// minimum is exclusive, matching MDAnalysis' `(min, max]` convention. Returned pairs are in row-major order and
 /// have matching entries in the returned distance vector.
 pub fn capped_distance(
     reference: &[[f64; 3]],
@@ -219,20 +226,20 @@ pub fn capped_distance(
     max_cutoff: f64,
     min_cutoff: Option<f64>,
     box_lengths: Option<Coordinate>,
-) -> Result<(Vec<(usize, usize)>, Vec<f64>)> {
+) -> Result<PairDistances> {
     let (min_cutoff, box_lengths) = validate_cutoffs(max_cutoff, min_cutoff, box_lengths)?;
     let mut pairs = Vec::new();
     let mut distances = Vec::new();
     for (i, &a) in reference.iter().enumerate() {
         for (j, &b) in configuration.iter().enumerate() {
             let distance = norm(minimum_image(sub(a, b), box_lengths));
-            if distance <= max_cutoff && min_cutoff.is_none_or(|minimum| distance >= minimum) {
+            if distance <= max_cutoff && min_cutoff.is_none_or(|minimum| distance > minimum) {
                 pairs.push((i, j));
                 distances.push(distance);
             }
         }
     }
-    Ok((pairs, distances))
+    Ok(PairDistances { pairs, distances })
 }
 
 /// Return all unique pairs in one collection whose distance is inside a
@@ -242,20 +249,20 @@ pub fn self_capped_distance(
     max_cutoff: f64,
     min_cutoff: Option<f64>,
     box_lengths: Option<Coordinate>,
-) -> Result<(Vec<(usize, usize)>, Vec<f64>)> {
+) -> Result<PairDistances> {
     let (min_cutoff, box_lengths) = validate_cutoffs(max_cutoff, min_cutoff, box_lengths)?;
     let mut pairs = Vec::new();
     let mut distances = Vec::new();
     for i in 0..reference.len() {
         for j in (i + 1)..reference.len() {
             let distance = norm(minimum_image(sub(reference[i], reference[j]), box_lengths));
-            if distance <= max_cutoff && min_cutoff.is_none_or(|minimum| distance >= minimum) {
+            if distance <= max_cutoff && min_cutoff.is_none_or(|minimum| distance > minimum) {
                 pairs.push((i, j));
                 distances.push(distance);
             }
         }
     }
-    Ok((pairs, distances))
+    Ok(PairDistances { pairs, distances })
 }
 
 fn ensure_same_len(operation: &'static str, expected: usize, found: usize) -> Result<()> {
@@ -349,7 +356,7 @@ fn angle_between(first: Coordinate, second: Coordinate) -> f64 {
 fn dihedral_from_bonds(ab: Coordinate, bc: Coordinate, cd: Coordinate) -> f64 {
     let bc_length = norm(bc);
     if bc_length == 0.0 {
-        return 0.0;
+        return f64::NAN;
     }
     let bc_unit = [bc[0] / bc_length, bc[1] / bc_length, bc[2] / bc_length];
     let ab_parallel = dot(ab, bc_unit);
@@ -367,7 +374,7 @@ fn dihedral_from_bonds(ab: Coordinate, bc: Coordinate, cd: Coordinate) -> f64 {
     let first_length = norm(first_normal);
     let second_length = norm(second_normal);
     if first_length == 0.0 || second_length == 0.0 {
-        return 0.0;
+        return f64::NAN;
     }
     let sine = dot(bc_unit, cross(first_normal, second_normal)) / (first_length * second_length);
     let cosine = dot(first_normal, second_normal) / (first_length * second_length);
@@ -426,6 +433,11 @@ mod tests {
             calc_angle([0.0; 3], [0.0; 3], [1.0, 0.0, 0.0], None).unwrap(),
             0.0
         );
+        assert!(
+            calc_dihedral([0.0; 3], [0.0; 3], [1.0, 0.0, 0.0], [2.0, 0.0, 0.0], None)
+                .unwrap()
+                .is_nan()
+        );
     }
 
     #[test]
@@ -447,13 +459,12 @@ mod tests {
     #[test]
     fn capped_distances_filter_and_exclude_self_pairs() {
         let points = [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [3.0, 0.0, 0.0]];
-        let (pairs, distances) =
-            capped_distance(&points[..2], &points[1..], 2.0, None, None).unwrap();
-        assert_eq!(pairs, vec![(0, 0), (1, 0), (1, 1)]);
-        assert_eq!(distances, vec![1.0, 0.0, 2.0]);
-        let (pairs, distances) = self_capped_distance(&points, 2.0, Some(1.0), None).unwrap();
-        assert_eq!(pairs, vec![(0, 1), (1, 2)]);
-        assert_eq!(distances, vec![1.0, 2.0]);
+        let result = capped_distance(&points[..2], &points[1..], 2.0, None, None).unwrap();
+        assert_eq!(result.pairs, vec![(0, 0), (1, 0), (1, 1)]);
+        assert_eq!(result.distances, vec![1.0, 0.0, 2.0]);
+        let result = self_capped_distance(&points, 2.0, Some(1.0), None).unwrap();
+        assert_eq!(result.pairs, vec![(1, 2)]);
+        assert_eq!(result.distances, vec![2.0]);
     }
 
     #[test]
