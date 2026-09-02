@@ -589,12 +589,17 @@ fn parse_crd(input: &str) -> Result<Structure, FormatError> {
         }
         let tokens: Vec<&str> = line.split_whitespace().collect();
         if !saw_count
-            && tokens.len() == 1
             && let Ok(count) = tokens[0].parse::<usize>()
         {
-            expected = Some(count);
-            saw_count = true;
-            continue;
+            // Extended CRD files append the literal `EXT` to the atom count.
+            // The token is a layout marker rather than a second count.
+            if tokens.len() == 1
+                || (tokens.len() == 2 && tokens[1].eq_ignore_ascii_case("EXT"))
+            {
+                expected = Some(count);
+                saw_count = true;
+                continue;
+            }
         }
         if tokens.len() < 8 {
             return Err(parse_error(
@@ -771,6 +776,13 @@ mod tests {
         assert_eq!(structure.atoms.len(), 2);
         assert_eq!(structure.title, "title");
         assert_eq!(structure.atoms[1].name, "CA");
+    }
+
+    #[test]
+    fn crd_accepts_extended_count_marker() {
+        let input = "* title\n    1 EXT\n    1 SEG 1 ALA N 1.0 2.0 3.0\n";
+        let structure = Structure::from_crd_str(input).expect("valid extended CRD");
+        assert_eq!(structure.atoms.len(), 1);
     }
 
     #[test]
