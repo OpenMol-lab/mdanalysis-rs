@@ -11,6 +11,7 @@ pub mod geometry;
 pub mod mdamath;
 pub mod pdb;
 pub mod selection;
+pub mod topology_groups;
 pub mod transformations;
 pub mod units;
 
@@ -20,6 +21,7 @@ pub use core::{Atom, AtomGroup, Bond, Frame, Residue, Segment, Topology, Traject
 pub use geometry::{Matrix3, Vec3, center_of_mass, distance, distance_array, rmsd};
 pub use mdamath::{angle, box_volume, dihedral, norm, triclinic_box, triclinic_vectors};
 pub use pdb::{PdbAtom, PdbError, PdbStructure, read_pdb, write_pdb};
+pub use topology_groups::{AngleValue, BondLength, DihedralValue, TopologyGroupExt};
 
 pub type Result<T> = std::result::Result<T, Error>;
 
