@@ -725,6 +725,16 @@ impl Universe {
         Self::from_format_structure(Structure::from_mol2_str(input)?)
     }
 
+    /// Construct a universe from a CHARMM CRD/CARD coordinate file.
+    pub fn from_crd(path: impl AsRef<Path>) -> crate::Result<Self> {
+        Self::from_format_structure(crate::formats::read_crd(path)?)
+    }
+
+    /// Construct a universe from a CRD/CARD document held in memory.
+    pub fn from_crd_str(input: &str) -> crate::Result<Self> {
+        Self::from_format_structure(Structure::from_crd_str(input)?)
+    }
+
     fn from_coordinate_file(file: CoordinateFile) -> crate::Result<Self> {
         let first = file.frames.first().ok_or_else(|| {
             crate::Error::InvalidInput("coordinate file has no frames".to_string())

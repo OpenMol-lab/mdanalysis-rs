@@ -35,8 +35,8 @@ pub use distances::{
     self_capped_distance, self_distance_array as coordinate_self_distance_array,
 };
 pub use formats::{
-    FormatAtom, FormatBond, FormatError, Structure, read_crd, read_mol2, read_pqr, write_mol2,
-    write_pqr,
+    FormatAtom, FormatBond, FormatError, Structure, read_crd, read_mol2, read_pqr, write_crd,
+    write_mol2, write_pqr,
 };
 pub use geometry::{
     Matrix3, Vec3, center_of_geometry, center_of_mass, distance, distance_array, rmsd,

@@ -179,6 +179,18 @@ impl Structure {
     pub fn read_crd<R: Read>(reader: R) -> Result<Self, FormatError> {
         read_text(reader, parse_crd)
     }
+
+    /// Write this structure as a standard or extended CRD document.
+    pub fn write_crd<W: Write>(&self, writer: W) -> Result<(), FormatError> {
+        write_crd_document(self, writer)
+    }
+
+    /// Serialize this structure as a CRD document.
+    pub fn to_crd_string(&self) -> Result<String, FormatError> {
+        let mut bytes = Vec::new();
+        self.write_crd(&mut bytes)?;
+        Ok(String::from_utf8_lossy(&bytes).into_owned())
+    }
 }
 
 /// Errors produced while parsing or writing text molecular formats.
@@ -238,6 +250,11 @@ pub fn write_mol2<P: AsRef<Path>>(path: P, structure: &Structure) -> Result<(), 
 /// Read a CRD/CARD structure from a filesystem path.
 pub fn read_crd<P: AsRef<Path>>(path: P) -> Result<Structure, FormatError> {
     Structure::read_crd(File::open(path)?)
+}
+
+/// Write a CRD/CARD structure to a filesystem path.
+pub fn write_crd<P: AsRef<Path>>(path: P, structure: &Structure) -> Result<(), FormatError> {
+    structure.write_crd(File::create(path)?)
 }
 
 fn read_text<R: Read>(
@@ -606,19 +623,19 @@ fn parse_crd(input: &str) -> Result<Structure, FormatError> {
         }
         let serial = parse_token(tokens[0], "atom serial", "CRD", line_number)?;
         let (segment_id, residue_id, residue_name, name, coordinate_start) =
-            if tokens[2].parse::<i32>().is_ok() {
+            if tokens[1].parse::<i32>().is_ok() {
+                (
+                    tokens.get(7).map(|value| (*value).to_owned()),
+                    parse_token(tokens[1], "residue number", "CRD", line_number)?,
+                    tokens[2].to_owned(),
+                    tokens[3].to_owned(),
+                    4,
+                )
+            } else if tokens[2].parse::<i32>().is_ok() {
                 (
                     Some(tokens[1].to_owned()),
                     parse_token(tokens[2], "residue number", "CRD", line_number)?,
                     tokens[3].to_owned(),
-                    tokens[4].to_owned(),
-                    5,
-                )
-            } else if tokens[3].parse::<i32>().is_ok() {
-                (
-                    Some(tokens[1].to_owned()),
-                    parse_token(tokens[3], "residue number", "CRD", line_number)?,
-                    tokens[2].to_owned(),
                     tokens[4].to_owned(),
                     5,
                 )
@@ -670,6 +687,62 @@ fn parse_crd(input: &str) -> Result<Structure, FormatError> {
         ));
     }
     Ok(structure)
+}
+
+fn write_crd_document<W: Write>(structure: &Structure, mut writer: W) -> Result<(), FormatError> {
+    validate_atoms(structure, "CRD")?;
+    let extended = structure.atoms.len() > 99_999;
+    if !structure.title.trim().is_empty() {
+        writeln!(writer, "* {}", structure.title.trim())?;
+    }
+    if extended {
+        writeln!(writer, "{:10} EXT", structure.atoms.len())?;
+        for (index, atom) in structure.atoms.iter().enumerate() {
+            let serial = if atom.serial == 0 {
+                index + 1
+            } else {
+                atom.serial
+            };
+            let segment = atom.segment_id.as_deref().unwrap_or("");
+            writeln!(
+                writer,
+                "{serial:10}{:10}  {:<8.8}  {:<8.8}{:20.10}{:20.10}{:20.10}  {:<8.8}  {:<8}{:20.10}",
+                atom.residue_id,
+                atom.residue_name,
+                atom.name,
+                atom.x,
+                atom.y,
+                atom.z,
+                segment,
+                atom.residue_id,
+                0.0_f64,
+            )?;
+        }
+    } else {
+        writeln!(writer, "{:5}", structure.atoms.len())?;
+        for (index, atom) in structure.atoms.iter().enumerate() {
+            let serial = if atom.serial == 0 {
+                index + 1
+            } else {
+                atom.serial
+            };
+            let segment = atom.segment_id.as_deref().unwrap_or("");
+            writeln!(
+                writer,
+                "{serial:5}{:5} {:<4.4} {:<4.4}{:10.5}{:10.5}{:10.5} {:<4.4} {:<4}{:10.5}",
+                atom.residue_id,
+                atom.residue_name,
+                atom.name,
+                atom.x,
+                atom.y,
+                atom.z,
+                segment,
+                atom.residue_id,
+                0.0_f64,
+            )?;
+        }
+    }
+    Ok(())
 }
 
 fn validate_atoms(structure: &Structure, format: &'static str) -> Result<(), FormatError> {
@@ -779,6 +852,23 @@ mod tests {
         let input = "* title\n    1 EXT\n    1 SEG 1 ALA N 1.0 2.0 3.0\n";
         let structure = Structure::from_crd_str(input).expect("valid extended CRD");
         assert_eq!(structure.atoms.len(), 1);
+    }
+
+    #[test]
+    fn crd_standard_layout_and_writer_round_trip() {
+        let input = concat!(
+            "* title\n",
+            "    2\n",
+            "    1    1 MET  N    -11.92100  26.30700  10.41000 4AKE 1      0.00000\n",
+            "    2    1 MET  CA   -10.92100  26.30700  10.41000 4AKE 1      0.00000\n",
+        );
+        let structure = Structure::from_crd_str(input).expect("standard CRD");
+        assert_eq!(structure.atoms[0].segment_id.as_deref(), Some("4AKE"));
+        assert_eq!(structure.atoms[1].position(), [-10.921, 26.307, 10.41]);
+        let reparsed = Structure::from_crd_str(&structure.to_crd_string().unwrap()).unwrap();
+        assert_eq!(reparsed.atoms.len(), 2);
+        assert_eq!(reparsed.atoms[0].residue_name, "MET");
+        assert_eq!(reparsed.atoms[0].segment_id.as_deref(), Some("4AKE"));
     }
 
     #[test]
