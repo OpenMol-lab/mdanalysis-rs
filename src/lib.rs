@@ -12,6 +12,7 @@ pub mod core;
 pub mod correlations;
 pub mod dcd;
 pub mod distances;
+pub mod dlpoly;
 pub mod fhiaims;
 pub mod formats;
 pub mod geometry;
@@ -48,6 +49,10 @@ pub use distances::{
     calc_dihedral, calc_dihedrals, capped_distance, distance_array as coordinate_distance_array,
     minimize_vectors, minimum_image_triclinic, self_capped_distance,
     self_distance_array as coordinate_self_distance_array, transform_r_to_s, transform_s_to_r,
+};
+pub use dlpoly::{
+    ConfigFile, DlpolyConfig, DlpolyError, DlpolyFrame, DlpolyHistory, HistoryFile, read_config,
+    read_history, write_config, write_config_file, write_history, write_history_file,
 };
 pub use fhiaims::{
     FhiaimsData, FhiaimsError, FhiaimsFile, FhiaimsStructure, read_fhiaims, write_fhiaims,
@@ -97,6 +102,7 @@ pub enum Error {
     Txyz(txyz::TxyzError),
     Psf(PsfError),
     Dcd(dcd::DcdError),
+    Dlpoly(dlpoly::DlpolyError),
     Coordinate(CoordinateError),
     Format(formats::FormatError),
     Fhiaims(fhiaims::FhiaimsError),
@@ -118,6 +124,7 @@ impl std::fmt::Display for Error {
             Self::Txyz(error) => write!(f, "Tinker XYZ error: {error}"),
             Self::Psf(error) => write!(f, "PSF error: {error}"),
             Self::Dcd(error) => write!(f, "DCD error: {error}"),
+            Self::Dlpoly(error) => write!(f, "DL_POLY error: {error}"),
             Self::Coordinate(error) => write!(f, "coordinate error: {error}"),
             Self::Format(error) => write!(f, "format error: {error}"),
             Self::Fhiaims(error) => write!(f, "FHI-AIMS error: {error}"),
@@ -182,6 +189,12 @@ impl From<PsfError> for Error {
 impl From<dcd::DcdError> for Error {
     fn from(error: dcd::DcdError) -> Self {
         Self::Dcd(error)
+    }
+}
+
+impl From<dlpoly::DlpolyError> for Error {
+    fn from(error: dlpoly::DlpolyError) -> Self {
+        Self::Dlpoly(error)
     }
 }
 
