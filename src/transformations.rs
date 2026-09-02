@@ -335,6 +335,7 @@ fn quaternion_matrix(quaternion: [f64; 4]) -> Matrix3 {
 // Jacobi diagonalization for the tiny, symmetric 4x4 matrix in Horn's
 // method.  This avoids pulling a full linear algebra dependency into the
 // crate for a fixed-size problem.
+#[allow(clippy::needless_range_loop)]
 fn principal_eigenvector(mut matrix: [[f64; 4]; 4]) -> [f64; 4] {
     let mut vectors = [[0.0; 4]; 4];
     for (index, row) in vectors.iter_mut().enumerate() {
