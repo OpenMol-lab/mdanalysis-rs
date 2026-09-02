@@ -35,6 +35,7 @@ pub struct PsfAtom {
 impl PsfAtom {
     /// Construct an atom record with the required topology fields.
     #[must_use]
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         index: usize,
         name: impl Into<String>,
@@ -150,10 +151,8 @@ impl PsfStructure {
         writeln!(writer)?;
         writeln!(writer, "{:>8} !NBOND: bonds", self.bonds.len())?;
         for (index, bond) in self.bonds.iter().enumerate() {
-            if index % 4 == 0 {
-                if index != 0 {
-                    writeln!(writer)?;
-                }
+            if index % 4 == 0 && index != 0 {
+                writeln!(writer)?;
             }
             write!(writer, "{:>8}{:>8}", bond.atom1, bond.atom2)?;
         }
@@ -369,10 +368,11 @@ fn parse_bonds(lines: &[&str], section: Section) -> Result<Vec<PsfBond>, PsfErro
             ),
         });
     }
-    Ok(values
-        .chunks_exact(2)
-        .map(|pair| PsfBond::new(pair[0], pair[1]))
-        .collect())
+    let mut bonds = Vec::with_capacity(values.len() / 2);
+    for pair in values.chunks(2) {
+        bonds.push(PsfBond::new(pair[0], pair[1]));
+    }
+    Ok(bonds)
 }
 
 fn validate_structure(structure: &PsfStructure) -> Result<(), PsfError> {
@@ -380,10 +380,15 @@ fn validate_structure(structure: &PsfStructure) -> Result<(), PsfError> {
 
     let mut indices = HashSet::with_capacity(structure.atoms.len());
     for (position, atom) in structure.atoms.iter().enumerate() {
-        if atom.index != 0 && !indices.insert(atom.index) {
+        let effective_index = if atom.index == 0 {
+            position + 1
+        } else {
+            atom.index
+        };
+        if !indices.insert(effective_index) {
             return Err(PsfError::InvalidStructure(format!(
                 "duplicate atom index {}",
-                atom.index
+                effective_index
             )));
         }
         if atom.name.trim().is_empty()
@@ -530,6 +535,21 @@ mod tests {
         let input = "PSF\n 1 !NATOM\n 1 SEG 1 ALA N N 0.0 1.0 0\n 1 !NBOND: bonds\n 1 2\n";
         assert!(matches!(
             PsfStructure::from_str(input),
+            Err(PsfError::InvalidStructure(_))
+        ));
+    }
+
+    #[test]
+    fn rejects_duplicate_effective_indices_when_writing() {
+        let structure = PsfStructure {
+            atoms: vec![
+                PsfAtom::default(),
+                PsfAtom::new(1, "CA", "CT1", 1, "ALA", "SEG", 12.0, 0.0),
+            ],
+            bonds: Vec::new(),
+        };
+        assert!(matches!(
+            structure.to_psf_string(),
             Err(PsfError::InvalidStructure(_))
         ));
     }
