@@ -2,7 +2,8 @@
 
 use crate::coordinates::CoordinateFile;
 use crate::formats::Structure;
-use crate::pdb::{PdbAtom, PdbStructure, read_pdb};
+use crate::pdb::{PdbAtom, PdbBond, PdbStructure, read_pdb};
+use crate::psf::{PsfStructure, read_psf};
 use crate::selection::{AtomLike, SelectionError, select};
 use std::path::Path;
 
@@ -83,12 +84,25 @@ impl AtomLike for Atom {
     fn segid(&self) -> &str {
         &self.segid
     }
+    fn atom_type(&self) -> Option<&str> {
+        self.atom_type.as_deref()
+    }
+    fn position(&self) -> [f64; 3] {
+        self.position
+    }
+    fn mass(&self) -> Option<f64> {
+        Some(self.mass)
+    }
+    fn charge(&self) -> Option<f64> {
+        Some(self.charge)
+    }
 }
 
 impl From<PdbAtom> for Atom {
     fn from(atom: PdbAtom) -> Self {
         let element = atom.element.clone();
         let position = atom.position();
+        let chain_id = atom.chain_id.map(|id| id.to_string()).unwrap_or_default();
         Self {
             index: atom.serial.saturating_sub(1) as usize,
             name: atom.name,
@@ -99,9 +113,13 @@ impl From<PdbAtom> for Atom {
             resid: atom.residue_sequence,
             residue_index: 0,
             resname: atom.residue_name,
-            segid: String::new(),
+            segid: if chain_id.is_empty() {
+                "SYSTEM".to_string()
+            } else {
+                chain_id.clone()
+            },
             segment_index: 0,
-            chain_id: atom.chain_id.map(|id| id.to_string()).unwrap_or_default(),
+            chain_id,
             position,
             velocity: None,
             force: None,
@@ -506,13 +524,41 @@ impl Universe {
     }
 
     fn from_pdb_structure(structure: PdbStructure) -> crate::Result<Self> {
-        let atoms: Vec<Atom> = structure.atoms.into_iter().map(Atom::from).collect();
+        let PdbStructure {
+            atoms: pdb_atoms,
+            frames: pdb_frames,
+            cryst1,
+            bonds: pdb_bonds,
+        } = structure;
+        let serial_to_index: std::collections::HashMap<u32, usize> = pdb_atoms
+            .iter()
+            .enumerate()
+            .map(|(index, atom)| (atom.serial, index))
+            .collect();
+        let atoms: Vec<Atom> = pdb_atoms.into_iter().map(Atom::from).collect();
         let mut universe = Self::from_atoms(atoms);
-        if structure.frames.len() > 1 {
-            universe.trajectory =
-                Trajectory::new(structure.frames.into_iter().map(Frame::new).collect());
+        if !pdb_frames.is_empty() {
+            universe.trajectory = Trajectory::new(
+                pdb_frames
+                    .into_iter()
+                    .enumerate()
+                    .map(|(step, positions)| {
+                        let mut frame = Frame::new(positions);
+                        frame.step = step;
+                        frame
+                    })
+                    .collect(),
+            );
         }
-        if let Some(cell) = structure.cryst1 {
+        for bond in pdb_bonds {
+            if let (Some(&atom1), Some(&atom2)) = (
+                serial_to_index.get(&bond.atom1),
+                serial_to_index.get(&bond.atom2),
+            ) {
+                universe.topology.add_bond(Bond::new(atom1, atom2));
+            }
+        }
+        if let Some(cell) = cryst1 {
             let dimensions = [cell.a, cell.b, cell.c, cell.alpha, cell.beta, cell.gamma];
             for frame in &mut universe.trajectory.frames {
                 frame.dimensions = Some(dimensions);
@@ -607,10 +653,15 @@ impl Universe {
             let mut atom = Atom::new(index, source.name.clone(), source.position());
             atom.resid = source.residue_id;
             atom.resname = source.residue_name.clone();
-            atom.segid = source.segment_id.clone().unwrap_or_default();
+            atom.segid = source
+                .segment_id
+                .clone()
+                .or_else(|| source.chain_id.clone())
+                .unwrap_or_else(|| "SYSTEM".to_string());
             atom.chain_id = source.chain_id.clone().unwrap_or_default();
             atom.charge = source.charge.unwrap_or(0.0);
             atom.element = infer_element(source.atom_type.as_deref().unwrap_or(&source.name));
+            atom.atom_type = source.atom_type.clone();
             atom.mass = atom
                 .element
                 .as_deref()
@@ -629,10 +680,108 @@ impl Universe {
                 .iter()
                 .position(|atom| atom.serial == bond.atom2);
             if let (Some(atom1), Some(atom2)) = (atom1, atom2) {
+                let mut topology_bond = Bond::new(atom1, atom2);
+                topology_bond.order = bond.bond_type.parse::<u8>().ok();
+                topology.add_bond(topology_bond);
+            }
+        }
+        Ok(Self::new(topology))
+    }
+
+    fn from_psf_structure(psf: PsfStructure) -> crate::Result<Self> {
+        let mut atoms = Vec::with_capacity(psf.atoms.len());
+        let mut serial_to_index = std::collections::HashMap::with_capacity(psf.atoms.len());
+        for (position, source) in psf.atoms.iter().enumerate() {
+            let serial = if source.index == 0 {
+                position + 1
+            } else {
+                source.index
+            };
+            serial_to_index.insert(serial, position);
+            let mut atom = Atom::new(position, source.name.clone(), [0.0, 0.0, 0.0]);
+            atom.atom_type = Some(source.atom_type.clone());
+            atom.element = infer_element(&source.atom_type).or_else(|| infer_element(&source.name));
+            atom.mass = source.mass;
+            atom.charge = source.charge;
+            atom.resid = source.resid;
+            atom.resname = source.resname.clone();
+            atom.segid = source.segid.clone();
+            atoms.push(atom);
+        }
+        let mut topology = Topology::new(atoms);
+        for bond in psf.bonds {
+            if let (Some(&atom1), Some(&atom2)) = (
+                serial_to_index.get(&bond.atom1),
+                serial_to_index.get(&bond.atom2),
+            ) {
                 topology.add_bond(Bond::new(atom1, atom2));
             }
         }
         Ok(Self::new(topology))
+    }
+
+    fn from_psf_and_pdb_structures(psf: PsfStructure, pdb: PdbStructure) -> crate::Result<Self> {
+        let mut universe = Self::from_psf_structure(psf)?;
+        if pdb.atoms.len() != universe.n_atoms() {
+            return Err(crate::Error::InvalidInput(format!(
+                "PDB contains {} atoms, PSF contains {}",
+                pdb.atoms.len(),
+                universe.n_atoms()
+            )));
+        }
+        if pdb.frames.is_empty() {
+            return Err(crate::Error::InvalidInput(
+                "PDB coordinate file has no frames".to_string(),
+            ));
+        }
+        universe.trajectory = Trajectory::new(
+            pdb.frames
+                .into_iter()
+                .enumerate()
+                .map(|(step, positions)| {
+                    let mut frame = Frame::new(positions);
+                    frame.step = step;
+                    frame
+                })
+                .collect(),
+        );
+        if let Some(cell) = pdb.cryst1 {
+            let dimensions = [cell.a, cell.b, cell.c, cell.alpha, cell.beta, cell.gamma];
+            for frame in &mut universe.trajectory.frames {
+                frame.dimensions = Some(dimensions);
+            }
+        }
+        Ok(universe)
+    }
+
+    fn from_psf_and_coordinate_file(
+        psf: PsfStructure,
+        coordinate_file: CoordinateFile,
+    ) -> crate::Result<Self> {
+        let mut universe = Self::from_psf_structure(psf)?;
+        let expected = universe.n_atoms();
+        if coordinate_file.frames.is_empty() {
+            return Err(crate::Error::InvalidInput(
+                "coordinate file has no frames".to_string(),
+            ));
+        }
+        let mut frames = Vec::with_capacity(coordinate_file.frames.len());
+        for (step, source) in coordinate_file.frames.into_iter().enumerate() {
+            if source.positions.len() != expected {
+                return Err(crate::Error::InvalidInput(format!(
+                    "coordinate frame contains {} atoms, PSF contains {}",
+                    source.positions.len(),
+                    expected
+                )));
+            }
+            let mut frame = Frame::new(source.positions);
+            frame.velocities = source.velocities;
+            frame.dimensions = source.dimensions;
+            frame.step = step;
+            frames.push(frame);
+        }
+        universe.trajectory = Trajectory::new(frames);
+        Ok(universe)
     }
 
     /// Write the current topology and all trajectory frames as a PDB file.
@@ -697,6 +846,12 @@ impl Universe {
             atoms,
             frames,
             cryst1,
+            bonds: self
+                .topology
+                .bonds
+                .iter()
+                .map(|bond| PdbBond::new(bond.atom1 as u32 + 1, bond.atom2 as u32 + 1))
+                .collect(),
         }
         .write_file(path)?;
         Ok(())
@@ -833,6 +988,59 @@ mod tests {
         assert_eq!(universe.n_atoms(), 2);
         assert_eq!(universe.topology.bonds.len(), 1);
         assert_eq!(universe.topology.bonds[0].partner(0), Some(1));
+        assert_eq!(universe.topology.bonds[0].order, Some(1));
+        assert_eq!(universe.topology.atoms[0].atom_type.as_deref(), Some("O.2"));
+    }
+
+    #[test]
+    fn psf_constructors_preserve_topology_and_attach_pdb_frames() {
+        let psf = concat!(
+            "PSF\n\n",
+            "       1 !NTITLE\n",
+            "* test\n\n",
+            "       2 !NATOM\n",
+            "       1 SEG      7 ALA      N        NH1         -0.300000      14.007000        0\n",
+            "       2 SEG      7 ALA      CA       CT1          0.100000      12.011000        0\n",
+            "\n       1 !NBOND: bonds\n",
+            "       1       2\n",
+        );
+        let pdb = concat!(
+            "MODEL        1\n",
+            "ATOM      1  N   ALA A   7       1.000   2.000   3.000  1.00 20.00           N  \n",
+            "ATOM      2  CA  ALA A   7       2.000   2.000   3.000  1.00 20.00           C  \n",
+            "ENDMDL\n",
+            "MODEL        2\n",
+            "ATOM      1  N   ALA A   7       4.000   5.000   6.000  1.00 20.00           N  \n",
+            "ATOM      2  CA  ALA A   7       5.000   5.000   6.000  1.00 20.00           C  \n",
+            "ENDMDL\n",
+        );
+        let mut universe = Universe::from_psf_and_pdb_str(psf, pdb).unwrap();
+        assert_eq!(universe.n_atoms(), 2);
+        assert_eq!(universe.n_residues(), 1);
+        assert_eq!(universe.n_segments(), 1);
+        assert_eq!(universe.n_frames(), 2);
+        assert_eq!(universe.topology.atoms[0].atom_type.as_deref(), Some("NH1"));
+        assert_eq!(universe.topology.atoms[0].element.as_deref(), Some("N"));
+        assert_eq!(universe.topology.atoms[0].mass, 14.007);
+        assert_eq!(universe.topology.atoms[0].charge, -0.3);
+        assert_eq!(universe.topology.bonds, vec![Bond::new(0, 1)]);
+        assert_eq!(universe.positions()[0], [1.0, 2.0, 3.0]);
+        universe.set_frame(1).unwrap();
+        assert_eq!(universe.positions()[0], [4.0, 5.0, 6.0]);
+    }
+
+    #[test]
+    fn psf_xyz_constructor_rejects_atom_count_mismatch() {
+        let psf = concat!(
+            "PSF\n\n",
+            "       1 !NATOM\n",
+            "       1 SEG      1 ALA      N        NH1          0.000000      14.007000        0\n",
+        );
+        let xyz = "2\nframe\nN 0 0 0\nH 1 0 0\n";
+        let error = Universe::from_psf_and_xyz_str(psf, xyz).unwrap_err();
+        assert!(
+            matches!(error, crate::Error::InvalidInput(message) if message.contains("PSF contains 1"))
+        );
     }
 
     #[test]

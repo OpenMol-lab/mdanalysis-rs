@@ -69,6 +69,22 @@ impl PdbAtom {
     }
 }
 
+/// A connectivity record from a PDB `CONECT` section.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PdbBond {
+    /// Serial number of the first atom.
+    pub atom1: u32,
+    /// Serial number of the bonded atom.
+    pub atom2: u32,
+}
+
+impl PdbBond {
+    #[must_use]
+    pub const fn new(atom1: u32, atom2: u32) -> Self {
+        Self { atom1, atom2 }
+    }
+}
+
 /// Unit-cell information from a `CRYST1` record.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PdbCryst1 {
@@ -96,6 +112,8 @@ pub struct PdbStructure {
     pub atoms: Vec<PdbAtom>,
     pub frames: Vec<Vec<[f64; 3]>>,
     pub cryst1: Option<PdbCryst1>,
+    /// Connectivity records in atom-serial-number space.
+    pub bonds: Vec<PdbBond>,
 }
 
 impl PdbStructure {
@@ -190,6 +208,10 @@ impl PdbStructure {
             }
         }
 
+        for bond in &self.bonds {
+            writeln!(writer, "CONECT{:>5}{:>5}", bond.atom1, bond.atom2)?;
+        }
+
         writer.write_all(b"END\n")?;
         Ok(())
     }
@@ -208,6 +230,7 @@ impl PdbStructure {
         let mut models = Vec::new();
         let mut saw_model = false;
         let mut cryst1 = None;
+        let mut bonds = Vec::new();
 
         for (line_index, line) in lines.into_iter().enumerate() {
             let line_number = line_index + 1;
@@ -246,6 +269,7 @@ impl PdbStructure {
                 "CRYST1" => {
                     cryst1 = Some(parse_cryst1(line, line_number)?);
                 }
+                "CONECT" => bonds.extend(parse_conect(line, line_number)?),
                 _ => {}
             }
         }
@@ -276,6 +300,7 @@ impl PdbStructure {
                 atoms,
                 frames,
                 cryst1,
+                bonds,
             })
         } else {
             let frames = if atoms.is_empty() {
@@ -287,6 +312,7 @@ impl PdbStructure {
                 atoms,
                 frames,
                 cryst1,
+                bonds,
             })
         }
     }
@@ -372,6 +398,48 @@ fn parse_cryst1(line: &str, line_number: usize) -> Result<PdbCryst1, PdbError> {
         space_group: field(line, 55, 66).trim().to_string(),
         z: parse_optional::<u32>(line, 66, 70, line_number, "CRYST1 Z")?,
     })
+}
+
+fn parse_conect(line: &str, line_number: usize) -> Result<Vec<PdbBond>, PdbError> {
+    let bytes = line.as_bytes();
+    let mut values = Vec::new();
+    // PDB CONECT records use five-column integer fields, but accepting
+    // whitespace-separated fields also handles common hand-written files.
+    if bytes.len() > 6 {
+        for chunk in bytes[6..].chunks(5) {
+            let value = std::str::from_utf8(chunk).unwrap_or("").trim();
+            if value.is_empty() {
+                continue;
+            }
+            values.push(value.parse::<u32>().map_err(|error| PdbError::Parse {
+                line: line_number,
+                message: format!("invalid CONECT atom serial {value:?}: {error}"),
+            })?);
+        }
+    }
+    if values.len() < 2 {
+        values = line
+            .split_whitespace()
+            .skip(1)
+            .map(|value| {
+                value.parse::<u32>().map_err(|error| PdbError::Parse {
+                    line: line_number,
+                    message: format!("invalid CONECT atom serial {value:?}: {error}"),
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+    }
+    if values.len() < 2 {
+        return Err(PdbError::Parse {
+            line: line_number,
+            message: "CONECT record requires an atom and at least one partner".to_string(),
+        });
+    }
+    Ok(values[1..]
+        .iter()
+        .copied()
+        .map(|atom2| PdbBond::new(values[0], atom2))
+        .collect())
 }
 
 fn field(line: &str, start: usize, end: usize) -> &str {
@@ -606,6 +674,20 @@ mod tests {
             [7.0, 8.0, 9.0]
         );
         assert_eq!(structure.atoms_for_frame(1).expect("atoms")[0].x, 7.0);
+    }
+
+    #[test]
+    fn parses_and_writes_conect_records() {
+        let input = concat!(
+            "ATOM      1  C   ALA A   1       1.000   2.000   3.000  1.00 10.00           C  \n",
+            "ATOM      2  O   ALA A   1       2.000   2.000   3.000  1.00 10.00           O  \n",
+            "CONECT    1    2\n",
+            "END\n",
+        );
+        let structure = PdbStructure::from_str(input).expect("valid connectivity");
+        assert_eq!(structure.bonds, vec![PdbBond::new(1, 2)]);
+        let reparsed = PdbStructure::from_str(&structure.to_pdb_string().unwrap()).unwrap();
+        assert_eq!(reparsed.bonds, structure.bonds);
     }
 
     #[test]
