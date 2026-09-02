@@ -240,7 +240,10 @@ pub fn read_crd<P: AsRef<Path>>(path: P) -> Result<Structure, FormatError> {
     Structure::read_crd(File::open(path)?)
 }
 
-fn read_text<R: Read>(reader: R, parser: fn(&str) -> Result<Structure, FormatError>) -> Result<Structure, FormatError> {
+fn read_text<R: Read>(
+    reader: R,
+    parser: fn(&str) -> Result<Structure, FormatError>,
+) -> Result<Structure, FormatError> {
     let mut input = String::new();
     BufReader::new(reader).read_to_string(&mut input)?;
     parser(&input)
@@ -260,7 +263,11 @@ fn parse_pqr(input: &str) -> Result<Structure, FormatError> {
         }
         let tokens: Vec<&str> = trimmed.split_whitespace().collect();
         if tokens.len() < 10 {
-            return Err(parse_error("PQR", line_number, "atom record requires serial, names, coordinates, charge, and radius"));
+            return Err(parse_error(
+                "PQR",
+                line_number,
+                "atom record requires serial, names, coordinates, charge, and radius",
+            ));
         }
         let serial = parse_token::<usize>(tokens[1], "atom serial", "PQR", line_number)?;
         let name = nonempty(tokens[2], "atom name", "PQR", line_number)?;
@@ -278,8 +285,18 @@ fn parse_pqr(input: &str) -> Result<Structure, FormatError> {
         };
         let coordinate_start = if chain_id.is_some() { 6 } else { 5 };
         let x = parse_token(tokens[coordinate_start], "x coordinate", "PQR", line_number)?;
-        let y = parse_token(tokens[coordinate_start + 1], "y coordinate", "PQR", line_number)?;
-        let z = parse_token(tokens[coordinate_start + 2], "z coordinate", "PQR", line_number)?;
+        let y = parse_token(
+            tokens[coordinate_start + 1],
+            "y coordinate",
+            "PQR",
+            line_number,
+        )?;
+        let z = parse_token(
+            tokens[coordinate_start + 2],
+            "z coordinate",
+            "PQR",
+            line_number,
+        )?;
         let charge = parse_token(tokens[coordinate_start + 3], "charge", "PQR", line_number)?;
         let radius = parse_token(tokens[coordinate_start + 4], "radius", "PQR", line_number)?;
         structure.atoms.push(FormatAtom {
@@ -288,7 +305,9 @@ fn parse_pqr(input: &str) -> Result<Structure, FormatError> {
             residue_name,
             residue_id: residue_index,
             chain_id,
-            segment_id: tokens.get(coordinate_start + 5).map(|value| (*value).to_owned()),
+            segment_id: tokens
+                .get(coordinate_start + 5)
+                .map(|value| (*value).to_owned()),
             atom_type: None,
             x,
             y,
@@ -304,12 +323,41 @@ fn write_pqr_document<W: Write>(structure: &Structure, mut writer: W) -> Result<
     validate_atoms(structure, "PQR")?;
     for atom in &structure.atoms {
         let chain = atom.chain_id.as_deref().unwrap_or("");
-        let charge = atom.charge.ok_or_else(|| FormatError::InvalidStructure(format!("atom {} has no charge", atom.serial)))?;
-        let radius = atom.radius.ok_or_else(|| FormatError::InvalidStructure(format!("atom {} has no radius", atom.serial)))?;
+        let charge = atom.charge.ok_or_else(|| {
+            FormatError::InvalidStructure(format!("atom {} has no charge", atom.serial))
+        })?;
+        let radius = atom.radius.ok_or_else(|| {
+            FormatError::InvalidStructure(format!("atom {} has no radius", atom.serial))
+        })?;
         if chain.is_empty() {
-            writeln!(writer, "ATOM {:>5} {:<4} {:<4} {:>5} {:>10.5} {:>10.5} {:>10.5} {:>9.5} {:>8.5}", atom.serial, atom.name, atom.residue_name, atom.residue_id, atom.x, atom.y, atom.z, charge, radius)?;
+            writeln!(
+                writer,
+                "ATOM {:>5} {:<4} {:<4} {:>5} {:>10.5} {:>10.5} {:>10.5} {:>9.5} {:>8.5}",
+                atom.serial,
+                atom.name,
+                atom.residue_name,
+                atom.residue_id,
+                atom.x,
+                atom.y,
+                atom.z,
+                charge,
+                radius
+            )?;
         } else {
-            writeln!(writer, "ATOM {:>5} {:<4} {:<4} {:<2} {:>5} {:>10.5} {:>10.5} {:>10.5} {:>9.5} {:>8.5}", atom.serial, atom.name, atom.residue_name, chain, atom.residue_id, atom.x, atom.y, atom.z, charge, radius)?;
+            writeln!(
+                writer,
+                "ATOM {:>5} {:<4} {:<4} {:<2} {:>5} {:>10.5} {:>10.5} {:>10.5} {:>9.5} {:>8.5}",
+                atom.serial,
+                atom.name,
+                atom.residue_name,
+                chain,
+                atom.residue_id,
+                atom.x,
+                atom.y,
+                atom.z,
+                charge,
+                radius
+            )?;
         }
     }
     writer.write_all(b"END\n")?;
@@ -318,7 +366,13 @@ fn write_pqr_document<W: Write>(structure: &Structure, mut writer: W) -> Result<
 
 fn parse_mol2(input: &str) -> Result<Structure, FormatError> {
     #[derive(Clone, Copy, PartialEq, Eq)]
-    enum Section { None, Molecule, Atom, Bond, Other }
+    enum Section {
+        None,
+        Molecule,
+        Atom,
+        Bond,
+        Other,
+    }
     let mut section = Section::None;
     let mut structure = Structure::default();
     let mut expected_atoms: Option<usize> = None;
@@ -350,16 +404,26 @@ fn parse_mol2(input: &str) -> Result<Structure, FormatError> {
                 } else if expected_atoms.is_none() {
                     let tokens: Vec<&str> = line.split_whitespace().collect();
                     if tokens.len() < 2 {
-                        return Err(parse_error("MOL2", line_number, "molecule counts require atoms and bonds"));
+                        return Err(parse_error(
+                            "MOL2",
+                            line_number,
+                            "molecule counts require atoms and bonds",
+                        ));
                     }
-                    expected_atoms = Some(parse_token(tokens[0], "atom count", "MOL2", line_number)?);
-                    expected_bonds = Some(parse_token(tokens[1], "bond count", "MOL2", line_number)?);
+                    expected_atoms =
+                        Some(parse_token(tokens[0], "atom count", "MOL2", line_number)?);
+                    expected_bonds =
+                        Some(parse_token(tokens[1], "bond count", "MOL2", line_number)?);
                 }
             }
             Section::Atom => {
                 let tokens: Vec<&str> = line.split_whitespace().collect();
                 if tokens.len() < 6 {
-                    return Err(parse_error("MOL2", line_number, "atom record requires at least six fields"));
+                    return Err(parse_error(
+                        "MOL2",
+                        line_number,
+                        "atom record requires at least six fields",
+                    ));
                 }
                 let serial = parse_token(tokens[0], "atom id", "MOL2", line_number)?;
                 let name = nonempty(tokens[1], "atom name", "MOL2", line_number)?;
@@ -371,16 +435,43 @@ fn parse_mol2(input: &str) -> Result<Structure, FormatError> {
                     Some(value) => parse_token(value, "substructure id", "MOL2", line_number)?,
                     None => 1,
                 };
-                let residue_name = tokens.get(7).map_or_else(|| "UNK".to_owned(), |value| (*value).to_owned());
-                let charge = tokens.get(8).map(|value| parse_token(value, "charge", "MOL2", line_number)).transpose()?;
-                structure.atoms.push(FormatAtom { serial, name, atom_type, residue_name, residue_id, chain_id: None, segment_id: None, x, y, z, charge, radius: None });
+                let residue_name = tokens
+                    .get(7)
+                    .map_or_else(|| "UNK".to_owned(), |value| (*value).to_owned());
+                let charge = tokens
+                    .get(8)
+                    .map(|value| parse_token(value, "charge", "MOL2", line_number))
+                    .transpose()?;
+                structure.atoms.push(FormatAtom {
+                    serial,
+                    name,
+                    atom_type,
+                    residue_name,
+                    residue_id,
+                    chain_id: None,
+                    segment_id: None,
+                    x,
+                    y,
+                    z,
+                    charge,
+                    radius: None,
+                });
             }
             Section::Bond => {
                 let tokens: Vec<&str> = line.split_whitespace().collect();
                 if tokens.len() < 4 {
-                    return Err(parse_error("MOL2", line_number, "bond record requires id, two atom ids, and type"));
+                    return Err(parse_error(
+                        "MOL2",
+                        line_number,
+                        "bond record requires id, two atom ids, and type",
+                    ));
                 }
-                structure.bonds.push(FormatBond { serial: parse_token(tokens[0], "bond id", "MOL2", line_number)?, atom1: parse_token(tokens[1], "first atom id", "MOL2", line_number)?, atom2: parse_token(tokens[2], "second atom id", "MOL2", line_number)?, bond_type: tokens[3].to_owned() });
+                structure.bonds.push(FormatBond {
+                    serial: parse_token(tokens[0], "bond id", "MOL2", line_number)?,
+                    atom1: parse_token(tokens[1], "first atom id", "MOL2", line_number)?,
+                    atom2: parse_token(tokens[2], "second atom id", "MOL2", line_number)?,
+                    bond_type: tokens[3].to_owned(),
+                });
             }
             Section::None | Section::Other => {}
         }
@@ -391,17 +482,35 @@ fn parse_mol2(input: &str) -> Result<Structure, FormatError> {
     if let Some(expected) = expected_atoms
         && expected != structure.atoms.len()
     {
-        return Err(parse_error("MOL2", molecule_data_line, format!("declared {expected} atoms but found {}", structure.atoms.len())));
+        return Err(parse_error(
+            "MOL2",
+            molecule_data_line,
+            format!(
+                "declared {expected} atoms but found {}",
+                structure.atoms.len()
+            ),
+        ));
     }
     if let Some(expected) = expected_bonds
         && expected != structure.bonds.len()
     {
-        return Err(parse_error("MOL2", molecule_data_line, format!("declared {expected} bonds but found {}", structure.bonds.len())));
+        return Err(parse_error(
+            "MOL2",
+            molecule_data_line,
+            format!(
+                "declared {expected} bonds but found {}",
+                structure.bonds.len()
+            ),
+        ));
     }
-    let atom_ids: std::collections::HashSet<usize> = structure.atoms.iter().map(|atom| atom.serial).collect();
+    let atom_ids: std::collections::HashSet<usize> =
+        structure.atoms.iter().map(|atom| atom.serial).collect();
     for bond in &structure.bonds {
         if !atom_ids.contains(&bond.atom1) || !atom_ids.contains(&bond.atom2) {
-            return Err(FormatError::InvalidStructure(format!("MOL2 bond {} references an unknown atom", bond.serial)));
+            return Err(FormatError::InvalidStructure(format!(
+                "MOL2 bond {} references an unknown atom",
+                bond.serial
+            )));
         }
     }
     Ok(structure)
@@ -409,28 +518,57 @@ fn parse_mol2(input: &str) -> Result<Structure, FormatError> {
 
 fn write_mol2_document<W: Write>(structure: &Structure, mut writer: W) -> Result<(), FormatError> {
     validate_atoms(structure, "MOL2")?;
-    let title = if structure.title.is_empty() { "mdanalysis-rs" } else { &structure.title };
+    let title = if structure.title.is_empty() {
+        "mdanalysis-rs"
+    } else {
+        &structure.title
+    };
     writeln!(writer, "@<TRIPOS>MOLECULE")?;
     writeln!(writer, "{title}")?;
-    writeln!(writer, "{} {} 0 0 0", structure.atoms.len(), structure.bonds.len())?;
+    writeln!(
+        writer,
+        "{} {} 0 0 0",
+        structure.atoms.len(),
+        structure.bonds.len()
+    )?;
     writeln!(writer, "SMALL")?;
     writeln!(writer, "USER_CHARGES")?;
     writeln!(writer)?;
     writeln!(writer, "@<TRIPOS>ATOM")?;
     for (index, atom) in structure.atoms.iter().enumerate() {
-        let serial = if atom.serial == 0 { index + 1 } else { atom.serial };
+        let serial = if atom.serial == 0 {
+            index + 1
+        } else {
+            atom.serial
+        };
         let atom_type = atom.atom_type.as_deref().unwrap_or("C.3");
         let subst_id = atom.residue_id;
-        let subst_name = if atom.residue_name.is_empty() { "UNK" } else { &atom.residue_name };
+        let subst_name = if atom.residue_name.is_empty() {
+            "UNK"
+        } else {
+            &atom.residue_name
+        };
         let charge = atom.charge.unwrap_or(0.0);
-        writeln!(writer, "{serial:>7} {:<8} {:>10.4} {:>10.4} {:>10.4} {:<8} {subst_id:>4} {:<8} {charge:>10.4}", atom.name, atom.x, atom.y, atom.z, atom_type, subst_name)?;
+        writeln!(
+            writer,
+            "{serial:>7} {:<8} {:>10.4} {:>10.4} {:>10.4} {:<8} {subst_id:>4} {:<8} {charge:>10.4}",
+            atom.name, atom.x, atom.y, atom.z, atom_type, subst_name
+        )?;
     }
     if !structure.bonds.is_empty() {
         writeln!(writer)?;
         writeln!(writer, "@<TRIPOS>BOND")?;
         for (index, bond) in structure.bonds.iter().enumerate() {
-            let serial = if bond.serial == 0 { index + 1 } else { bond.serial };
-            writeln!(writer, "{serial:>6} {:-6} {:-6} {}", bond.atom1, bond.atom2, bond.bond_type)?;
+            let serial = if bond.serial == 0 {
+                index + 1
+            } else {
+                bond.serial
+            };
+            writeln!(
+                writer,
+                "{serial:>6} {:-6} {:-6} {}",
+                bond.atom1, bond.atom2, bond.bond_type
+            )?;
         }
     }
     Ok(())
@@ -459,25 +597,76 @@ fn parse_crd(input: &str) -> Result<Structure, FormatError> {
             continue;
         }
         if tokens.len() < 8 {
-            return Err(parse_error("CRD", line_number, "atom record requires at least eight fields"));
+            return Err(parse_error(
+                "CRD",
+                line_number,
+                "atom record requires at least eight fields",
+            ));
         }
         let serial = parse_token(tokens[0], "atom serial", "CRD", line_number)?;
-        let (segment_id, residue_id, residue_name, name, coordinate_start) = if tokens[2].parse::<i32>().is_ok() {
-            (Some(tokens[1].to_owned()), parse_token(tokens[2], "residue number", "CRD", line_number)?, tokens[3].to_owned(), tokens[4].to_owned(), 5)
-        } else if tokens[3].parse::<i32>().is_ok() {
-            (Some(tokens[1].to_owned()), parse_token(tokens[3], "residue number", "CRD", line_number)?, tokens[2].to_owned(), tokens[4].to_owned(), 5)
-        } else {
-            return Err(parse_error("CRD", line_number, "cannot identify residue number"));
-        };
+        let (segment_id, residue_id, residue_name, name, coordinate_start) =
+            if tokens[2].parse::<i32>().is_ok() {
+                (
+                    Some(tokens[1].to_owned()),
+                    parse_token(tokens[2], "residue number", "CRD", line_number)?,
+                    tokens[3].to_owned(),
+                    tokens[4].to_owned(),
+                    5,
+                )
+            } else if tokens[3].parse::<i32>().is_ok() {
+                (
+                    Some(tokens[1].to_owned()),
+                    parse_token(tokens[3], "residue number", "CRD", line_number)?,
+                    tokens[2].to_owned(),
+                    tokens[4].to_owned(),
+                    5,
+                )
+            } else {
+                return Err(parse_error(
+                    "CRD",
+                    line_number,
+                    "cannot identify residue number",
+                ));
+            };
         let x = parse_token(tokens[coordinate_start], "x coordinate", "CRD", line_number)?;
-        let y = parse_token(tokens[coordinate_start + 1], "y coordinate", "CRD", line_number)?;
-        let z = parse_token(tokens[coordinate_start + 2], "z coordinate", "CRD", line_number)?;
-        structure.atoms.push(FormatAtom { serial, name: nonempty(&name, "atom name", "CRD", line_number)?, atom_type: None, residue_name: nonempty(&residue_name, "residue name", "CRD", line_number)?, residue_id, chain_id: None, segment_id, x, y, z, charge: None, radius: None });
+        let y = parse_token(
+            tokens[coordinate_start + 1],
+            "y coordinate",
+            "CRD",
+            line_number,
+        )?;
+        let z = parse_token(
+            tokens[coordinate_start + 2],
+            "z coordinate",
+            "CRD",
+            line_number,
+        )?;
+        structure.atoms.push(FormatAtom {
+            serial,
+            name: nonempty(&name, "atom name", "CRD", line_number)?,
+            atom_type: None,
+            residue_name: nonempty(&residue_name, "residue name", "CRD", line_number)?,
+            residue_id,
+            chain_id: None,
+            segment_id,
+            x,
+            y,
+            z,
+            charge: None,
+            radius: None,
+        });
     }
     if let Some(expected) = expected
         && expected != structure.atoms.len()
     {
-        return Err(parse_error("CRD", 1, format!("declared {expected} atoms but found {}", structure.atoms.len())));
+        return Err(parse_error(
+            "CRD",
+            1,
+            format!(
+                "declared {expected} atoms but found {}",
+                structure.atoms.len()
+            ),
+        ));
     }
     Ok(structure)
 }
@@ -485,28 +674,52 @@ fn parse_crd(input: &str) -> Result<Structure, FormatError> {
 fn validate_atoms(structure: &Structure, format: &'static str) -> Result<(), FormatError> {
     for (index, atom) in structure.atoms.iter().enumerate() {
         if atom.name.trim().is_empty() {
-            return Err(FormatError::InvalidStructure(format!("{format} atom {} has an empty name", index + 1)));
+            return Err(FormatError::InvalidStructure(format!(
+                "{format} atom {} has an empty name",
+                index + 1
+            )));
         }
         if !atom.x.is_finite() || !atom.y.is_finite() || !atom.z.is_finite() {
-            return Err(FormatError::InvalidStructure(format!("{format} atom {} has non-finite coordinates", index + 1)));
+            return Err(FormatError::InvalidStructure(format!(
+                "{format} atom {} has non-finite coordinates",
+                index + 1
+            )));
         }
     }
     Ok(())
 }
 
 fn parse_error(format: &'static str, line: usize, message: impl Into<String>) -> FormatError {
-    FormatError::Parse { format, line, message: message.into() }
+    FormatError::Parse {
+        format,
+        line,
+        message: message.into(),
+    }
 }
 
-fn parse_token<T: std::str::FromStr>(value: &str, field: &str, format: &'static str, line: usize) -> Result<T, FormatError>
+fn parse_token<T: std::str::FromStr>(
+    value: &str,
+    field: &str,
+    format: &'static str,
+    line: usize,
+) -> Result<T, FormatError>
 where
     T::Err: fmt::Display,
 {
-    value.parse::<T>().map_err(|error| parse_error(format, line, format!("invalid {field} {value:?}: {error}")))
+    value
+        .parse::<T>()
+        .map_err(|error| parse_error(format, line, format!("invalid {field} {value:?}: {error}")))
 }
 
-fn nonempty(value: &str, field: &str, format: &'static str, line: usize) -> Result<String, FormatError> {
-    (!value.trim().is_empty()).then(|| value.to_owned()).ok_or_else(|| parse_error(format, line, format!("missing {field}")))
+fn nonempty(
+    value: &str,
+    field: &str,
+    format: &'static str,
+    line: usize,
+) -> Result<String, FormatError> {
+    (!value.trim().is_empty())
+        .then(|| value.to_owned())
+        .ok_or_else(|| parse_error(format, line, format!("missing {field}")))
 }
 
 #[cfg(test)]
@@ -528,7 +741,14 @@ mod tests {
     #[test]
     fn malformed_pqr_reports_line() {
         let error = Structure::from_pqr_str("ATOM 1 N ALA A 1 1.0 bad 3.0 -0.3 1.5").unwrap_err();
-        assert!(matches!(error, FormatError::Parse { format: "PQR", line: 1, .. }));
+        assert!(matches!(
+            error,
+            FormatError::Parse {
+                format: "PQR",
+                line: 1,
+                ..
+            }
+        ));
     }
 
     #[test]
@@ -545,7 +765,8 @@ mod tests {
 
     #[test]
     fn crd_reads_card_layout_and_count() {
-        let input = "* title\n    2\n    1 SEG 1 ALA N 1.0 2.0 3.0\n    2 SEG 1 ALA CA 2.0 3.0 4.0\n";
+        let input =
+            "* title\n    2\n    1 SEG 1 ALA N 1.0 2.0 3.0\n    2 SEG 1 ALA CA 2.0 3.0 4.0\n";
         let structure = Structure::from_crd_str(input).expect("valid CRD");
         assert_eq!(structure.atoms.len(), 2);
         assert_eq!(structure.title, "title");
@@ -555,6 +776,9 @@ mod tests {
     #[test]
     fn mol2_count_mismatch_is_rejected() {
         let input = "@<TRIPOS>MOLECULE\nx\n2 0 0 0 0\n@<TRIPOS>ATOM\n1 C 0 0 0 C.3 1 X 0\n";
-        assert!(matches!(Structure::from_mol2_str(input), Err(FormatError::Parse { format: "MOL2", .. })));
+        assert!(matches!(
+            Structure::from_mol2_str(input),
+            Err(FormatError::Parse { format: "MOL2", .. })
+        ));
     }
 }
