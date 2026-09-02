@@ -7,7 +7,9 @@ use crate::formats::Structure;
 use crate::pdb::{PdbAtom, PdbBond, PdbStructure, read_pdb};
 use crate::pdbqt::{PdbqtAtom, PdbqtStructure, read_pdbqt};
 use crate::psf::{PsfStructure, read_psf};
-use crate::selection::{AtomLike, SelectionError, select, select_with_bonds};
+use crate::selection::{
+    AtomLike, Selection, SelectionError, select, select_with_bonds, select_with_bonds_and_groups,
+};
 use crate::xdr::{TrrFile, XtcFile, read_trr, read_xtc};
 use std::path::Path;
 
@@ -475,6 +477,33 @@ impl AtomGroup {
                 .cloned()
                 .collect(),
         ))
+    }
+
+    /// Select atoms using named groups supplied as `(name, group)` pairs.
+    pub fn select_atoms_with_groups(
+        &self,
+        expression: &str,
+        groups: &[(&str, &AtomGroup)],
+    ) -> Result<Self, SelectionError> {
+        let index_groups: Vec<(&str, Vec<usize>)> = groups
+            .iter()
+            .map(|(name, group)| (*name, group.atoms.iter().map(|atom| atom.index).collect()))
+            .collect();
+        let group_slices: Vec<(&str, &[usize])> = index_groups
+            .iter()
+            .map(|(name, indices)| (*name, indices.as_slice()))
+            .collect();
+        let selection = Selection::parse(expression)?;
+        let selected = if selection.expression_contains_global() {
+            let global_atoms: Vec<Atom> = groups
+                .iter()
+                .flat_map(|(_, group)| group.atoms.iter().cloned())
+                .collect();
+            selection.apply_with_bonds_and_groups(&global_atoms, &[], &group_slices)?
+        } else {
+            selection.apply_with_bonds_and_groups(&self.atoms, &[], &group_slices)?
+        };
+        Ok(Self::new(selected.into_iter().cloned().collect()))
     }
 
     pub fn get(&self, index: usize) -> Option<&Atom> {
@@ -1381,6 +1410,38 @@ impl Universe {
         ))
     }
 
+    /// Select atoms using named groups, retaining the Universe topology and
+    /// evaluating `global` modifiers against the full Universe atom set.
+    pub fn select_atoms_with_groups(
+        &self,
+        expression: &str,
+        groups: &[(&str, &AtomGroup)],
+    ) -> Result<AtomGroup, SelectionError> {
+        let atoms = self.atoms();
+        let bonds: Vec<(usize, usize)> = self
+            .topology
+            .bonds
+            .iter()
+            .map(|bond| (bond.atom1, bond.atom2))
+            .collect();
+        let index_groups: Vec<(&str, Vec<usize>)> = groups
+            .iter()
+            .map(|(name, group)| (*name, group.atoms.iter().map(|atom| atom.index).collect()))
+            .collect();
+        let group_slices: Vec<(&str, &[usize])> = index_groups
+            .iter()
+            .map(|(name, indices)| (*name, indices.as_slice()))
+            .collect();
+        let selected = select_with_bonds_and_groups(
+            &atoms.atoms,
+            expression,
+            &bonds,
+            &group_slices,
+            Some(&atoms.atoms),
+        )?;
+        Ok(AtomGroup::new(selected.into_iter().cloned().collect()))
+    }
+
     pub fn add_frame(&mut self, mut frame: Frame) -> crate::Result<()> {
         if frame.n_atoms() != self.topology.atoms.len() {
             return Err(crate::Error::InvalidInput(format!(
@@ -1557,6 +1618,36 @@ mod tests {
                 .len(),
             1
         );
+    }
+
+    #[test]
+    fn named_group_selection_and_global_scope_work() {
+        let universe = sample();
+        let ca = universe.select_atoms("name CA").unwrap();
+        assert_eq!(
+            universe
+                .select_atoms_with_groups("group backbone", &[("backbone", &ca)])
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(
+            universe.select_atoms_with_groups("group missing", &[]),
+            Err(SelectionError::UnknownGroup("missing".to_owned()))
+        );
+
+        let oxygen = universe.select_atoms("name O").unwrap();
+        let nearby = universe
+            .select_atoms_with_groups("around 2 global group backbone", &[("backbone", &ca)])
+            .unwrap();
+        assert_eq!(nearby.len(), 1);
+        assert_eq!(nearby[0].name, "O");
+
+        let outside = ca
+            .select_atoms_with_groups("global group solvent", &[("solvent", &oxygen)])
+            .unwrap();
+        assert_eq!(outside.len(), 1);
+        assert_eq!(outside[0].name, "O");
     }
 
     #[test]

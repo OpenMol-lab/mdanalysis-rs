@@ -60,6 +60,9 @@ pub enum SelectionError {
     InvalidValue { predicate: String, value: String },
     /// A range was written backwards.
     InvalidRange { start: i64, end: i64 },
+    /// A named atom group was requested but was not supplied to the selection
+    /// context.
+    UnknownGroup(String),
 }
 
 impl fmt::Display for SelectionError {
@@ -85,6 +88,7 @@ impl fmt::Display for SelectionError {
             Self::InvalidRange { start, end } => {
                 write!(f, "selection range cannot descend from {start} to {end}")
             }
+            Self::UnknownGroup(group) => write!(f, "unknown selection group {group:?}"),
         }
     }
 }
@@ -138,9 +142,77 @@ impl Selection {
             .collect()
     }
 
+    /// Apply this selection against named groups and preserve input order.
+    ///
+    /// Each tuple contains a group name and the zero-based atom indices in
+    /// that group.  The group names are resolved before matching so a typo is
+    /// reported as [`SelectionError::UnknownGroup`] rather than silently
+    /// producing an empty selection.
+    pub fn apply_with_groups<'a, A: AtomLike>(
+        &self,
+        atoms: &'a [A],
+        groups: &[(&str, &[usize])],
+    ) -> Result<Vec<&'a A>, SelectionError> {
+        self.apply_with_bonds_and_groups(atoms, &[], groups)
+    }
+
+    /// Apply this selection with both a bond table and named atom groups.
+    pub fn apply_with_bonds_and_groups<'a, A: AtomLike>(
+        &self,
+        atoms: &'a [A],
+        bonds: &[(usize, usize)],
+        groups: &[(&str, &[usize])],
+    ) -> Result<Vec<&'a A>, SelectionError> {
+        self.apply_with_bonds_and_groups_and_global_atoms(atoms, bonds, groups, None)
+    }
+
+    /// Apply a selection with topology, named groups, and an optional global
+    /// atom scope used by modifiers such as `around ... global ...`.
+    pub fn apply_with_bonds_and_groups_and_global_atoms<'a, A: AtomLike>(
+        &self,
+        atoms: &'a [A],
+        bonds: &[(usize, usize)],
+        groups: &[(&str, &[usize])],
+        global_atoms: Option<&'a [A]>,
+    ) -> Result<Vec<&'a A>, SelectionError> {
+        self.validate_groups(groups)?;
+        let evaluation_atoms = if self.expression.contains_global() {
+            global_atoms.unwrap_or(atoms)
+        } else {
+            atoms
+        };
+        Ok(evaluation_atoms
+            .iter()
+            .filter(|atom| {
+                self.expression.matches_with_context(
+                    *atom,
+                    evaluation_atoms,
+                    bonds,
+                    groups,
+                    global_atoms,
+                )
+            })
+            .collect())
+    }
+
+    fn validate_groups(&self, groups: &[(&str, &[usize])]) -> Result<(), SelectionError> {
+        let mut names = Vec::new();
+        self.expression.group_names(&mut names);
+        for name in names {
+            if !groups.iter().any(|(candidate, _)| *candidate == name) {
+                return Err(SelectionError::UnknownGroup(name));
+            }
+        }
+        Ok(())
+    }
+
     /// Alias for [`Selection::apply`].
     pub fn select<'a, A: AtomLike>(&self, atoms: &'a [A]) -> Vec<&'a A> {
         self.apply(atoms)
+    }
+
+    pub(crate) fn expression_contains_global(&self) -> bool {
+        self.expression.contains_global()
     }
 }
 
@@ -159,6 +231,32 @@ pub fn select_with_bonds<'a, A: AtomLike>(
     bonds: &[(usize, usize)],
 ) -> Result<Vec<&'a A>, SelectionError> {
     Selection::parse(expression).map(|selection| selection.apply_with_bonds(atoms, bonds))
+}
+
+/// Parse `expression` and return matching atoms using named groups.
+pub fn select_with_groups<'a, A: AtomLike>(
+    atoms: &'a [A],
+    expression: &str,
+    groups: &[(&str, &[usize])],
+) -> Result<Vec<&'a A>, SelectionError> {
+    Selection::parse(expression)?.apply_with_groups(atoms, groups)
+}
+
+/// Parse and evaluate a selection with topology, named groups, and a global
+/// atom scope used by `global` modifiers.
+pub fn select_with_bonds_and_groups<'a, A: AtomLike>(
+    atoms: &'a [A],
+    expression: &str,
+    bonds: &[(usize, usize)],
+    groups: &[(&str, &[usize])],
+    global_atoms: Option<&'a [A]>,
+) -> Result<Vec<&'a A>, SelectionError> {
+    Selection::parse(expression)?.apply_with_bonds_and_groups_and_global_atoms(
+        atoms,
+        bonds,
+        groups,
+        global_atoms,
+    )
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -193,6 +291,7 @@ enum Expr {
     ByRes(Box<Self>),
     Global(Box<Self>),
     Bonded(Box<Self>),
+    Group(String),
     And(Box<Self>, Box<Self>),
     Or(Box<Self>, Box<Self>),
     Not(Box<Self>),
@@ -208,6 +307,17 @@ impl Expr {
         atom: &A,
         atoms: &[A],
         bonds: &[(usize, usize)],
+    ) -> bool {
+        self.matches_with_context(atom, atoms, bonds, &[], None)
+    }
+
+    fn matches_with_context<A: AtomLike>(
+        &self,
+        atom: &A,
+        atoms: &[A],
+        bonds: &[(usize, usize)],
+        groups: &[(&str, &[usize])],
+        global_atoms: Option<&[A]>,
     ) -> bool {
         match self {
             Self::All => true,
@@ -262,13 +372,18 @@ impl Expr {
                     && matches!(atom.name(), "C1'" | "C2'" | "C3'" | "C4'" | "O4'")
             }
             Self::Around { cutoff, selection } => {
-                if selection.matches_with_bonds(atom, atoms, bonds) {
+                if selection.matches_with_context(atom, atoms, bonds, groups, global_atoms) {
                     return false;
                 }
                 let cutoff = cutoff.0;
                 let cutoff_squared = cutoff * cutoff;
-                atoms.iter().any(|reference| {
-                    selection.matches_with_bonds(reference, atoms, bonds)
+                let reference_atoms = if selection.contains_global() {
+                    global_atoms.unwrap_or(atoms)
+                } else {
+                    atoms
+                };
+                reference_atoms.iter().any(|reference| {
+                    selection.matches_with_context(reference, atoms, bonds, groups, global_atoms)
                         && squared_distance(atom.position(), reference.position()) < cutoff_squared
                 })
             }
@@ -280,18 +395,20 @@ impl Expr {
                 property,
                 selection,
             } => atoms.iter().any(|reference| {
-                selection.matches_with_bonds(reference, atoms, bonds)
+                selection.matches_with_context(reference, atoms, bonds, groups, global_atoms)
                     && property.matches(atom, reference)
             }),
             Self::Atom { segid, resid, name } => {
                 atom.segid() == segid && i64::from(atom.resid()) == *resid && atom.name() == name
             }
             Self::ByRes(selection) => atoms.iter().any(|reference| {
-                selection.matches_with_bonds(reference, atoms, bonds)
+                selection.matches_with_context(reference, atoms, bonds, groups, global_atoms)
                     && reference.resid() == atom.resid()
                     && reference.segid() == atom.segid()
             }),
-            Self::Global(selection) => selection.matches_with_bonds(atom, atoms, bonds),
+            Self::Global(selection) => {
+                selection.matches_with_context(atom, atoms, bonds, groups, global_atoms)
+            }
             Self::Bonded(selection) => bonds.iter().any(|(left, right)| {
                 let neighbor_index = if *left == atom.index() {
                     Some(*right)
@@ -305,19 +422,63 @@ impl Expr {
                         .iter()
                         .find(|candidate| candidate.index() == index)
                         .is_some_and(|candidate| {
-                            selection.matches_with_bonds(candidate, atoms, bonds)
+                            selection.matches_with_context(
+                                candidate,
+                                atoms,
+                                bonds,
+                                groups,
+                                global_atoms,
+                            )
                         })
                 })
             }),
+            Self::Group(name) => groups
+                .iter()
+                .find(|(candidate, _)| *candidate == name)
+                .is_some_and(|(_, indices)| indices.contains(&atom.index())),
             Self::And(left, right) => {
-                left.matches_with_bonds(atom, atoms, bonds)
-                    && right.matches_with_bonds(atom, atoms, bonds)
+                left.matches_with_context(atom, atoms, bonds, groups, global_atoms)
+                    && right.matches_with_context(atom, atoms, bonds, groups, global_atoms)
             }
             Self::Or(left, right) => {
-                left.matches_with_bonds(atom, atoms, bonds)
-                    || right.matches_with_bonds(atom, atoms, bonds)
+                left.matches_with_context(atom, atoms, bonds, groups, global_atoms)
+                    || right.matches_with_context(atom, atoms, bonds, groups, global_atoms)
             }
-            Self::Not(expression) => !expression.matches_with_bonds(atom, atoms, bonds),
+            Self::Not(expression) => {
+                !expression.matches_with_context(atom, atoms, bonds, groups, global_atoms)
+            }
+        }
+    }
+
+    fn group_names(&self, names: &mut Vec<String>) {
+        match self {
+            Self::Group(name) => names.push(name.clone()),
+            Self::Around { selection, .. }
+            | Self::Same { selection, .. }
+            | Self::ByRes(selection)
+            | Self::Global(selection)
+            | Self::Bonded(selection)
+            | Self::Not(selection) => selection.group_names(names),
+            Self::And(left, right) | Self::Or(left, right) => {
+                left.group_names(names);
+                right.group_names(names);
+            }
+            _ => {}
+        }
+    }
+
+    fn contains_global(&self) -> bool {
+        match self {
+            Self::Global(_) => true,
+            Self::Around { selection, .. }
+            | Self::Same { selection, .. }
+            | Self::ByRes(selection)
+            | Self::Bonded(selection)
+            | Self::Not(selection) => selection.contains_global(),
+            Self::And(left, right) | Self::Or(left, right) => {
+                left.contains_global() || right.contains_global()
+            }
+            _ => false,
         }
     }
 }
@@ -826,6 +987,7 @@ fn is_selection_keyword(value: &str) -> bool {
             | "global"
             | "byres"
             | "bonded"
+            | "group"
             | "name"
             | "resname"
             | "resid"
@@ -950,6 +1112,7 @@ impl Parser {
             "global" => Ok(Expr::Global(Box::new(self.parse_unary()?))),
             "byres" => Ok(Expr::ByRes(Box::new(self.parse_unary()?))),
             "bonded" => Ok(Expr::Bonded(Box::new(self.parse_unary()?))),
+            "group" => Ok(Expr::Group(self.parse_one_string("group")?)),
             "name" => Ok(Expr::Predicate(Predicate::Name(
                 self.parse_string_values("name")?,
             ))),
@@ -1236,7 +1399,9 @@ impl Parser {
 
 #[cfg(test)]
 mod tests {
-    use super::{AtomLike, Selection, SelectionError, select, select_with_bonds};
+    use super::{
+        AtomLike, Selection, SelectionError, select, select_with_bonds, select_with_groups,
+    };
 
     #[derive(Debug)]
     struct TestAtom {
@@ -1424,6 +1589,30 @@ mod tests {
             vec![0]
         );
         assert!(select(&atoms, "bonded name N").unwrap().is_empty());
+    }
+
+    #[test]
+    fn named_groups_match_indices_and_report_missing_names() {
+        let atoms = atoms();
+        let group_indices = [0, 2];
+        assert_eq!(
+            select_with_groups(&atoms, "not group solvent", &[("solvent", &group_indices)])
+                .unwrap()
+                .iter()
+                .map(|atom| atom.index())
+                .collect::<Vec<_>>(),
+            vec![1]
+        );
+        assert_eq!(
+            select_with_groups(&atoms, "group solvent", &[("solvent", &group_indices)])
+                .unwrap()
+                .len(),
+            2
+        );
+        assert!(matches!(
+            select_with_groups(&atoms, "group missing", &[]),
+            Err(SelectionError::UnknownGroup(name)) if name == "missing"
+        ));
     }
 
     #[test]
