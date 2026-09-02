@@ -677,6 +677,38 @@ impl Universe {
         )
     }
 
+    /// Construct a universe from PSF topology and a DCD trajectory file.
+    pub fn from_psf_and_dcd(
+        psf_path: impl AsRef<Path>,
+        dcd_path: impl AsRef<Path>,
+    ) -> crate::Result<Self> {
+        Self::from_psf_and_dcd_file(
+            read_psf(psf_path)?,
+            DcdFile::read(std::fs::File::open(dcd_path)?)?,
+        )
+    }
+
+    /// Construct a universe from PSF topology and DCD bytes held in memory.
+    pub fn from_psf_and_dcd_bytes(psf: &str, dcd: &[u8]) -> crate::Result<Self> {
+        Self::from_psf_and_dcd_file(PsfStructure::from_str(psf)?, DcdFile::from_bytes(dcd)?)
+    }
+
+    /// Construct a universe from PDB topology and a DCD trajectory file.
+    pub fn from_pdb_and_dcd(
+        pdb_path: impl AsRef<Path>,
+        dcd_path: impl AsRef<Path>,
+    ) -> crate::Result<Self> {
+        Self::from_pdb_and_dcd_structures(
+            read_pdb(pdb_path)?,
+            DcdFile::read(std::fs::File::open(dcd_path)?)?,
+        )
+    }
+
+    /// Construct a universe from PDB topology and DCD bytes held in memory.
+    pub fn from_pdb_and_dcd_bytes(pdb: &str, dcd: &[u8]) -> crate::Result<Self> {
+        Self::from_pdb_and_dcd_structures(PdbStructure::from_str(pdb)?, DcdFile::from_bytes(dcd)?)
+    }
+
     pub fn from_pqr(path: impl AsRef<Path>) -> crate::Result<Self> {
         Self::from_format_structure(crate::formats::read_pqr(path)?)
     }
@@ -766,6 +798,50 @@ impl Universe {
             topology,
             trajectory: Trajectory::new(frames),
         })
+    }
+
+    fn from_psf_and_dcd_file(psf: PsfStructure, dcd: DcdFile) -> crate::Result<Self> {
+        let mut universe = Self::from_psf_structure(psf)?;
+        universe.attach_dcd(dcd)?;
+        Ok(universe)
+    }
+
+    fn from_pdb_and_dcd_structures(pdb: PdbStructure, dcd: DcdFile) -> crate::Result<Self> {
+        let mut universe = Self::from_pdb_structure(pdb)?;
+        universe.attach_dcd(dcd)?;
+        Ok(universe)
+    }
+
+    fn attach_dcd(&mut self, dcd: DcdFile) -> crate::Result<()> {
+        if dcd.header.n_atoms != self.n_atoms() {
+            return Err(crate::Error::InvalidInput(format!(
+                "DCD contains {} atoms, topology contains {}",
+                dcd.header.n_atoms,
+                self.n_atoms()
+            )));
+        }
+        if dcd.coordinates.frames.is_empty() {
+            return Err(crate::Error::InvalidInput(
+                "DCD coordinate file has no frames".to_owned(),
+            ));
+        }
+        let frames = dcd
+            .coordinates
+            .frames
+            .into_iter()
+            .enumerate()
+            .map(|(index, coordinate)| {
+                let step =
+                    i64::from(dcd.header.istart) + i64::from(dcd.header.nsavc) * index as i64;
+                let mut frame = Frame::new(coordinate.positions);
+                frame.dimensions = coordinate.dimensions;
+                frame.step = usize::try_from(step).unwrap_or(0);
+                frame.time = dcd.header.delta * step as f64;
+                frame
+            })
+            .collect();
+        self.trajectory = Trajectory::new(frames);
+        Ok(())
     }
 
     fn from_format_structure(structure: Structure) -> crate::Result<Self> {
@@ -1178,6 +1254,38 @@ mod tests {
         assert!(
             matches!(error, crate::Error::InvalidInput(message) if message.contains("PSF contains 1"))
         );
+    }
+
+    #[test]
+    fn psf_dcd_constructor_attaches_frames_and_times() {
+        let psf = concat!(
+            "PSF\n\n",
+            "       2 !NATOM\n",
+            "       1 SEG      1 ALA      N        NH1          0.000000      14.007000        0\n",
+            "       2 SEG      1 ALA      CA       CT1          0.000000      12.011000        0\n",
+        );
+        let coordinates = CoordinateFile::new(vec![
+            crate::coordinates::CoordinateFrame::new(vec![[1.0, 2.0, 3.0], [2.0, 2.0, 3.0]]),
+            crate::coordinates::CoordinateFrame::new(vec![[4.0, 5.0, 6.0], [5.0, 5.0, 6.0]]),
+        ]);
+        let dcd = crate::dcd::DcdFile {
+            header: crate::dcd::DcdHeader {
+                n_frames: 2,
+                n_atoms: 2,
+                istart: 3,
+                nsavc: 2,
+                delta: 0.5,
+                ..crate::dcd::DcdHeader::default()
+            },
+            coordinates,
+        };
+        let bytes = dcd.to_bytes().unwrap();
+        let universe = Universe::from_psf_and_dcd_bytes(psf, &bytes).unwrap();
+        assert_eq!(universe.n_frames(), 2);
+        assert_eq!(universe.trajectory.frames[0].step, 3);
+        assert_eq!(universe.trajectory.frames[1].step, 5);
+        assert!((universe.trajectory.frames[1].time - 2.5).abs() < 1.0e-6);
+        assert_eq!(universe.topology.bonds.len(), 0);
     }
 
     #[test]
