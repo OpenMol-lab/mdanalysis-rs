@@ -314,13 +314,39 @@ fn parse_atom(line: &str, line_number: usize) -> Result<PsfAtom, PsfError> {
         ));
     }
     let index = parse_token(tokens[0], "atom index", line_number)?;
-    let segid = nonempty(tokens[1], "segment id", line_number)?;
-    let resid = parse_token(tokens[2], "residue id", line_number)?;
-    let resname = nonempty(tokens[3], "residue name", line_number)?;
-    let name = nonempty(tokens[4], "atom name", line_number)?;
-    let atom_type = nonempty(tokens[5], "atom type", line_number)?;
-    let charge = parse_float(tokens[6], "charge", line_number)?;
-    let mass = parse_float(tokens[7], "mass", line_number)?;
+    // X-PLOR PSF files may omit the segment identifier entirely. In that
+    // layout the second field is the numeric residue id and all following
+    // fields shift one position to the left.
+    let (segid, resid, resname, name, atom_type, charge, mass) = if tokens
+        .get(2)
+        .and_then(|value| value.parse::<i32>().ok())
+        .is_some()
+    {
+        (
+            nonempty(tokens[1], "segment id", line_number)?,
+            parse_token(tokens[2], "residue id", line_number)?,
+            nonempty(tokens[3], "residue name", line_number)?,
+            nonempty(tokens[4], "atom name", line_number)?,
+            nonempty(tokens[5], "atom type", line_number)?,
+            parse_float(tokens[6], "charge", line_number)?,
+            parse_float(tokens[7], "mass", line_number)?,
+        )
+    } else if tokens[1].parse::<i32>().is_ok() {
+        (
+            "SYSTEM".to_owned(),
+            parse_token(tokens[1], "residue id", line_number)?,
+            nonempty(tokens[2], "residue name", line_number)?,
+            nonempty(tokens[3], "atom name", line_number)?,
+            nonempty(tokens[4], "atom type", line_number)?,
+            parse_float(tokens[5], "charge", line_number)?,
+            parse_float(tokens[6], "mass", line_number)?,
+        )
+    } else {
+        return Err(PsfError::Parse {
+            line: line_number,
+            message: "NATOM record has no numeric residue id".to_owned(),
+        });
+    };
     Ok(PsfAtom {
         index,
         name,
@@ -521,6 +547,22 @@ mod tests {
         let input = PSF.replace("-0.470000", "-4.700000D-01");
         let structure = PsfStructure::read(Cursor::new(input.as_bytes())).expect("read PSF");
         assert!((structure.atoms[0].charge + 0.47).abs() < 1e-12);
+    }
+
+    #[test]
+    fn accepts_xplor_atoms_without_segment_ids() {
+        let input = concat!(
+            "PSF\n\n",
+            "       1 !NTITLE\n",
+            " REMARKS no segment id\n\n",
+            "       2 !NATOM\n",
+            "       1      66   GLY  N    N     -0.415700       14.0100           0\n",
+            "       2      66   GLY  CA   CT    -0.025200       12.0100           0\n",
+        );
+        let structure = PsfStructure::from_str(input).expect("valid X-PLOR PSF");
+        assert_eq!(structure.atoms[0].segid, "SYSTEM");
+        assert_eq!(structure.atoms[0].resid, 66);
+        assert_eq!(structure.atoms[0].name, "N");
     }
 
     #[test]
