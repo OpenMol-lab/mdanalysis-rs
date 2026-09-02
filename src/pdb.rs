@@ -420,7 +420,7 @@ where
 
 fn format_atom(atom: &PdbAtom) -> String {
     let record = if atom.hetatm { "HETATM" } else { "ATOM  " };
-    let atom_name = fit_field(&atom.name, 4, false);
+    let atom_name = format_atom_name(atom);
     let residue_name = fit_field(&atom.residue_name, 3, true);
     let chain_id = atom.chain_id.unwrap_or(' ');
     let alt_loc = atom.alt_loc.unwrap_or(' ');
@@ -444,6 +444,25 @@ fn format_atom(atom: &PdbAtom) -> String {
         "{record}{:>5} {atom_name}{alt_loc}{residue_name} {chain_id}{:>4}{insertion_code}   {:>8.3}{:>8.3}{:>8.3}{occupancy}{temperature_factor}          {element}{charge}",
         atom.serial, atom.residue_sequence, atom.x, atom.y, atom.z
     )
+}
+
+fn format_atom_name(atom: &PdbAtom) -> String {
+    let name: String = atom.name.chars().take(4).collect();
+    if name.chars().count() >= 4 {
+        return name;
+    }
+
+    // PDB uses a leading blank for names whose element is one character
+    // (e.g. " CA "), while two-character elements are left-aligned ("FE  ").
+    let element_len = atom
+        .element
+        .as_deref()
+        .map_or(1, |element| element.trim().chars().count());
+    if element_len <= 1 {
+        format!(" {name:<3}")
+    } else {
+        format!("{name:<4}")
+    }
 }
 
 fn format_cryst1(cryst1: &PdbCryst1) -> String {
@@ -568,6 +587,7 @@ mod tests {
     fn writes_and_reads_back_models() {
         let structure = PdbStructure::from_str(SINGLE_MODEL).expect("valid PDB");
         let text = structure.to_pdb_string().expect("write PDB");
+        assert!(text.contains("ATOM      1  N   ALA A   1"));
         let reparsed = PdbStructure::from_str(&text).expect("read written PDB");
         assert_eq!(reparsed.atoms, structure.atoms);
         assert_eq!(reparsed.frames, structure.frames);

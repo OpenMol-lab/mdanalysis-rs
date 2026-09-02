@@ -513,7 +513,7 @@ impl Parser {
 
 #[cfg(test)]
 mod tests {
-    use super::{select, AtomLike, Selection, SelectionError};
+    use super::{AtomLike, Selection, SelectionError, select};
 
     #[derive(Debug)]
     struct TestAtom {
