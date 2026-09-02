@@ -249,6 +249,27 @@ pub fn helix_best_fit_axis_array(coordinates: &[[f64; 3]]) -> Option<HelixAxis> 
     helix_best_fit_axis(&coordinates)
 }
 
+/// Return the unit vector of best fit, oriented toward the first point.
+///
+/// This is the vector-only form used by MDAnalysis' helix analysis helper.
+/// For a single point (or coincident points) the direction is zero.
+#[must_use]
+pub fn vector_of_best_fit(coordinates: &[Vec3]) -> Option<Vec3> {
+    let axis = helix_best_fit_axis(coordinates)?;
+    if coordinates.len() > 1 && axis.direction.dot(coordinates[0] - axis.origin) < 0.0 {
+        Some(-axis.direction)
+    } else {
+        Some(axis.direction)
+    }
+}
+
+/// Array-coordinate wrapper for [`vector_of_best_fit`].
+#[must_use]
+pub fn vector_of_best_fit_array(coordinates: &[[f64; 3]]) -> Option<Vec3> {
+    let coordinates: Vec<Vec3> = coordinates.iter().copied().map(Vec3::from).collect();
+    vector_of_best_fit(&coordinates)
+}
+
 /// Return the centroid and direction of a best-fit helix axis.
 #[must_use]
 pub fn best_fit_axis(coordinates: &[Vec3]) -> Option<(Vec3, Vec3)> {
@@ -460,6 +481,7 @@ mod tests {
         close(axis.direction.x, 1.0);
         close(axis.rmsd, 0.0);
         close(axis.length, 3.0);
+        close(vector_of_best_fit(&line).unwrap().x, -1.0);
     }
 
     #[test]
