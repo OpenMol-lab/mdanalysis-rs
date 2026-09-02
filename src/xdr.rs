@@ -1165,6 +1165,31 @@ fn read_trr_frame(reader: &mut XdrReader<'_>) -> Result<TrrFrameData, XdrError> 
         ));
     }
     let double_precision = float_size == 8;
+    let vector_bytes = natoms
+        .checked_mul(3)
+        .and_then(|values| values.checked_mul(float_size))
+        .ok_or_else(|| parse_error(reader.offset(), "TRR vector payload size overflows"))?;
+    for (name, size) in [("x_size", x_size), ("v_size", v_size), ("f_size", f_size)] {
+        if size != 0 && size != vector_bytes {
+            return Err(parse_error(
+                reader.offset(),
+                format!("TRR {name} is {size} bytes; expected {vector_bytes}"),
+            ));
+        }
+    }
+    let matrix_bytes = 9 * float_size;
+    for (name, size) in [
+        ("box_size", box_size),
+        ("vir_size", vir_size),
+        ("pres_size", pres_size),
+    ] {
+        if size != 0 && size != matrix_bytes {
+            return Err(parse_error(
+                reader.offset(),
+                format!("TRR {name} is {size} bytes; expected {matrix_bytes}"),
+            ));
+        }
+    }
     let time = read_real(reader, float_size)?;
     let lambda = read_real(reader, float_size)?;
     let dimensions = if box_size != 0 {
