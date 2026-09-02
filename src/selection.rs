@@ -356,6 +356,7 @@ enum SameProperty {
     Y,
     Z,
     Resid,
+    Residue,
     Resname,
     Name,
     Type,
@@ -377,6 +378,7 @@ impl SameProperty {
                 (atom.position()[axis] - reference.position()[axis]).abs() <= 1.0e-6
             }
             Self::Resid => atom.resid() == reference.resid(),
+            Self::Residue => atom.resid() == reference.resid() && atom.segid() == reference.segid(),
             Self::Resname => atom.resname() == reference.resname(),
             Self::Name => atom.name() == reference.name(),
             Self::Type => atom.atom_type() == reference.atom_type(),
@@ -1030,6 +1032,7 @@ impl Parser {
             "y" => SameProperty::Y,
             "z" => SameProperty::Z,
             "resid" | "resnum" => SameProperty::Resid,
+            "residue" => SameProperty::Residue,
             "resname" => SameProperty::Resname,
             "name" => SameProperty::Name,
             "type" => SameProperty::Type,
