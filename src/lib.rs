@@ -70,7 +70,9 @@ pub use geometry::{
 pub use gms::{GmsAtom, GmsData, GmsError, GmsFile, GmsParser, GmsReader, GmsStructure, read_gms};
 pub use guesser::{Guesser, GuesserError, guess_bonds, guess_element, guess_mass};
 pub use lammps::{
-    LammpsAtom, LammpsBond, LammpsBox, LammpsData, LammpsDataFile, LammpsError, read_lammps_data,
+    LammpsAtom, LammpsBond, LammpsBox, LammpsCoordinateConvention, LammpsData, LammpsDataFile,
+    LammpsDumpData, LammpsDumpFile, LammpsDumpFrame, LammpsDumpOptions, LammpsDumpReader,
+    LammpsError, read_lammps_data, read_lammps_dump, read_lammps_dump_with_options,
     write_lammps_data,
 };
 pub use mdamath::{angle, box_volume, dihedral, norm, triclinic_box, triclinic_vectors};
