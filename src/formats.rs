@@ -588,14 +588,10 @@ fn parse_crd(input: &str) -> Result<Structure, FormatError> {
             continue;
         }
         let tokens: Vec<&str> = line.split_whitespace().collect();
-        if !saw_count
-            && let Ok(count) = tokens[0].parse::<usize>()
-        {
+        if !saw_count && let Ok(count) = tokens[0].parse::<usize>() {
             // Extended CRD files append the literal `EXT` to the atom count.
             // The token is a layout marker rather than a second count.
-            if tokens.len() == 1
-                || (tokens.len() == 2 && tokens[1].eq_ignore_ascii_case("EXT"))
-            {
+            if tokens.len() == 1 || (tokens.len() == 2 && tokens[1].eq_ignore_ascii_case("EXT")) {
                 expected = Some(count);
                 saw_count = true;
                 continue;
