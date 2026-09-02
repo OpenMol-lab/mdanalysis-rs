@@ -5,7 +5,7 @@ use crate::dcd::DcdFile;
 use crate::formats::Structure;
 use crate::pdb::{PdbAtom, PdbBond, PdbStructure, read_pdb};
 use crate::psf::{PsfStructure, read_psf};
-use crate::selection::{AtomLike, SelectionError, select};
+use crate::selection::{AtomLike, SelectionError, select, select_with_bonds};
 use std::path::Path;
 
 /// A single atom and its topology metadata.
@@ -1074,7 +1074,19 @@ impl Universe {
     }
 
     pub fn select_atoms(&self, expression: &str) -> Result<AtomGroup, SelectionError> {
-        self.atoms().select_atoms(expression)
+        let atoms = self.atoms();
+        let bonds: Vec<(usize, usize)> = self
+            .topology
+            .bonds
+            .iter()
+            .map(|bond| (bond.atom1, bond.atom2))
+            .collect();
+        Ok(AtomGroup::new(
+            select_with_bonds(&atoms.atoms, expression, &bonds)?
+                .into_iter()
+                .cloned()
+                .collect(),
+        ))
     }
 
     pub fn add_frame(&mut self, mut frame: Frame) -> crate::Result<()> {
@@ -1198,6 +1210,22 @@ mod tests {
         let universe = sample();
         assert_eq!(universe.select_atoms("name CA").unwrap().len(), 1);
         assert_eq!(universe.select_atoms("resid 2").unwrap().len(), 1);
+    }
+
+    #[test]
+    fn bonded_selection_uses_universe_bonds() {
+        let mut universe = sample();
+        universe.topology.add_bond(Bond::new(0, 1));
+        let selected = universe.select_atoms("bonded name O").unwrap();
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].name, "CA");
+        assert_eq!(
+            universe
+                .select_atoms("name CA and bonded resname HOH")
+                .unwrap()
+                .len(),
+            1
+        );
     }
 
     #[test]

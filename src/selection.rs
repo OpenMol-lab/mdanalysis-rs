@@ -123,9 +123,18 @@ impl Selection {
 
     /// Apply this selection to a slice, preserving the input order.
     pub fn apply<'a, A: AtomLike>(&self, atoms: &'a [A]) -> Vec<&'a A> {
+        self.apply_with_bonds(atoms, &[])
+    }
+
+    /// Apply this selection with an optional zero-based bond table.
+    pub fn apply_with_bonds<'a, A: AtomLike>(
+        &self,
+        atoms: &'a [A],
+        bonds: &[(usize, usize)],
+    ) -> Vec<&'a A> {
         atoms
             .iter()
-            .filter(|atom| self.expression.matches(*atom, atoms))
+            .filter(|atom| self.expression.matches_with_bonds(*atom, atoms, bonds))
             .collect()
     }
 
@@ -141,6 +150,15 @@ pub fn select<'a, A: AtomLike>(
     expression: &str,
 ) -> Result<Vec<&'a A>, SelectionError> {
     Selection::parse(expression).map(|selection| selection.apply(atoms))
+}
+
+/// Parse `expression` and return matching atoms using a zero-based bond table.
+pub fn select_with_bonds<'a, A: AtomLike>(
+    atoms: &'a [A],
+    expression: &str,
+    bonds: &[(usize, usize)],
+) -> Result<Vec<&'a A>, SelectionError> {
+    Selection::parse(expression).map(|selection| selection.apply_with_bonds(atoms, bonds))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -174,6 +192,7 @@ enum Expr {
     },
     ByRes(Box<Self>),
     Global(Box<Self>),
+    Bonded(Box<Self>),
     And(Box<Self>, Box<Self>),
     Or(Box<Self>, Box<Self>),
     Not(Box<Self>),
@@ -181,6 +200,15 @@ enum Expr {
 
 impl Expr {
     fn matches<A: AtomLike>(&self, atom: &A, atoms: &[A]) -> bool {
+        self.matches_with_bonds(atom, atoms, &[])
+    }
+
+    fn matches_with_bonds<A: AtomLike>(
+        &self,
+        atom: &A,
+        atoms: &[A],
+        bonds: &[(usize, usize)],
+    ) -> bool {
         match self {
             Self::All => true,
             Self::None => false,
@@ -234,13 +262,13 @@ impl Expr {
                     && matches!(atom.name(), "C1'" | "C2'" | "C3'" | "C4'" | "O4'")
             }
             Self::Around { cutoff, selection } => {
-                if selection.matches(atom, atoms) {
+                if selection.matches_with_bonds(atom, atoms, bonds) {
                     return false;
                 }
                 let cutoff = cutoff.0;
                 let cutoff_squared = cutoff * cutoff;
                 atoms.iter().any(|reference| {
-                    selection.matches(reference, atoms)
+                    selection.matches_with_bonds(reference, atoms, bonds)
                         && squared_distance(atom.position(), reference.position()) < cutoff_squared
                 })
             }
@@ -252,20 +280,44 @@ impl Expr {
                 property,
                 selection,
             } => atoms.iter().any(|reference| {
-                selection.matches(reference, atoms) && property.matches(atom, reference)
+                selection.matches_with_bonds(reference, atoms, bonds)
+                    && property.matches(atom, reference)
             }),
             Self::Atom { segid, resid, name } => {
                 atom.segid() == segid && i64::from(atom.resid()) == *resid && atom.name() == name
             }
             Self::ByRes(selection) => atoms.iter().any(|reference| {
-                selection.matches(reference, atoms)
+                selection.matches_with_bonds(reference, atoms, bonds)
                     && reference.resid() == atom.resid()
                     && reference.segid() == atom.segid()
             }),
-            Self::Global(selection) => selection.matches(atom, atoms),
-            Self::And(left, right) => left.matches(atom, atoms) && right.matches(atom, atoms),
-            Self::Or(left, right) => left.matches(atom, atoms) || right.matches(atom, atoms),
-            Self::Not(expression) => !expression.matches(atom, atoms),
+            Self::Global(selection) => selection.matches_with_bonds(atom, atoms, bonds),
+            Self::Bonded(selection) => bonds.iter().any(|(left, right)| {
+                let neighbor_index = if *left == atom.index() {
+                    Some(*right)
+                } else if *right == atom.index() {
+                    Some(*left)
+                } else {
+                    None
+                };
+                neighbor_index.is_some_and(|index| {
+                    atoms
+                        .iter()
+                        .find(|candidate| candidate.index() == index)
+                        .is_some_and(|candidate| {
+                            selection.matches_with_bonds(candidate, atoms, bonds)
+                        })
+                })
+            }),
+            Self::And(left, right) => {
+                left.matches_with_bonds(atom, atoms, bonds)
+                    && right.matches_with_bonds(atom, atoms, bonds)
+            }
+            Self::Or(left, right) => {
+                left.matches_with_bonds(atom, atoms, bonds)
+                    || right.matches_with_bonds(atom, atoms, bonds)
+            }
+            Self::Not(expression) => !expression.matches_with_bonds(atom, atoms, bonds),
         }
     }
 }
@@ -773,6 +825,7 @@ fn is_selection_keyword(value: &str) -> bool {
             | "nucleicsugar"
             | "global"
             | "byres"
+            | "bonded"
             | "name"
             | "resname"
             | "resid"
@@ -896,6 +949,7 @@ impl Parser {
             "nucleicsugar" => Ok(Expr::NucleicSugar),
             "global" => Ok(Expr::Global(Box::new(self.parse_unary()?))),
             "byres" => Ok(Expr::ByRes(Box::new(self.parse_unary()?))),
+            "bonded" => Ok(Expr::Bonded(Box::new(self.parse_unary()?))),
             "name" => Ok(Expr::Predicate(Predicate::Name(
                 self.parse_string_values("name")?,
             ))),
@@ -1182,7 +1236,7 @@ impl Parser {
 
 #[cfg(test)]
 mod tests {
-    use super::{AtomLike, Selection, SelectionError, select};
+    use super::{AtomLike, Selection, SelectionError, select, select_with_bonds};
 
     #[derive(Debug)]
     struct TestAtom {
@@ -1347,6 +1401,29 @@ mod tests {
         assert_eq!(select(&atoms, "same x as index 0").unwrap().len(), 2);
         assert_eq!(select(&atoms, "global backbone").unwrap().len(), 2);
         assert_eq!(select(&atoms, "byres name CA").unwrap().len(), 2);
+    }
+
+    #[test]
+    fn bonded_selectors_use_the_supplied_topology() {
+        let atoms = atoms();
+        let bonds = [(0, 1), (1, 2)];
+        assert_eq!(
+            select_with_bonds(&atoms, "bonded name N", &bonds)
+                .unwrap()
+                .iter()
+                .map(|atom| atom.index())
+                .collect::<Vec<_>>(),
+            vec![0, 2]
+        );
+        assert_eq!(
+            select_with_bonds(&atoms, "type CT1 and bonded name N", &bonds)
+                .unwrap()
+                .iter()
+                .map(|atom| atom.index())
+                .collect::<Vec<_>>(),
+            vec![0]
+        );
+        assert!(select(&atoms, "bonded name N").unwrap().is_empty());
     }
 
     #[test]
