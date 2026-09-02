@@ -157,17 +157,49 @@ enum Predicate {
 impl Predicate {
     fn matches<A: AtomLike>(&self, atom: &A) -> bool {
         match self {
-            Self::Name(value) => atom.name() == value,
-            Self::Resname(value) => atom.resname() == value,
+            Self::Name(value) => matches_pattern(atom.name(), value),
+            Self::Resname(value) => matches_pattern(atom.resname(), value),
             Self::Resid(range) => range.contains(i64::from(atom.resid())),
             Self::Index(range) => i64::try_from(atom.index())
                 .map(|index| range.contains(index))
                 .unwrap_or(false),
-            Self::Element(value) => atom.element().is_some_and(|element| element == value),
-            Self::ChainId(value) => atom.chain_id() == value,
-            Self::Segid(value) => atom.segid() == value,
+            Self::Element(value) => atom
+                .element()
+                .is_some_and(|element| matches_pattern(element, value)),
+            Self::ChainId(value) => matches_pattern(atom.chain_id(), value),
+            Self::Segid(value) => matches_pattern(atom.segid(), value),
         }
     }
+}
+
+/// Match the simple shell-style wildcards accepted by MDAnalysis selectors.
+/// `*` matches any sequence and `?` matches one character; all other
+/// characters are literal. Matching is case-sensitive, as atom names are.
+fn matches_pattern(value: &str, pattern: &str) -> bool {
+    let value: Vec<char> = value.chars().collect();
+    let pattern: Vec<char> = pattern.chars().collect();
+    let mut states = vec![false; value.len() + 1];
+    states[0] = true;
+    for &token in &pattern {
+        let mut next = vec![false; value.len() + 1];
+        for index in 0..=value.len() {
+            if !states[index] {
+                continue;
+            }
+            match token {
+                '*' => {
+                    for slot in &mut next[index..] {
+                        *slot = true;
+                    }
+                }
+                '?' if index < value.len() => next[index + 1] = true,
+                literal if index < value.len() && literal == value[index] => next[index + 1] = true,
+                _ => {}
+            }
+        }
+        states = next;
+    }
+    states[value.len()]
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -312,7 +344,7 @@ impl<'a> Lexer<'a> {
 }
 
 fn is_identifier_start(character: char) -> bool {
-    character.is_ascii_alphanumeric() || matches!(character, '_' | '*' | '.' | '+' | '/')
+    character.is_ascii_alphanumeric() || matches!(character, '_' | '*' | '?' | '.' | '+' | '/')
 }
 
 fn is_identifier_continue(character: char) -> bool {
@@ -417,7 +449,7 @@ impl Parser {
             "segid" => Ok(Expr::Predicate(Predicate::Segid(
                 self.parse_string_value("segid")?,
             ))),
-            "resid" => Ok(Expr::Predicate(Predicate::Resid(
+            "resid" | "resnum" => Ok(Expr::Predicate(Predicate::Resid(
                 self.parse_range("resid")?,
             ))),
             "index" => Ok(Expr::Predicate(Predicate::Index(
@@ -600,6 +632,32 @@ mod tests {
             assert_eq!(selection.apply(&atoms).len(), expected, "{expression}");
         }
         assert_eq!(select(&atoms, "name CA").unwrap().len(), 1);
+    }
+
+    #[test]
+    fn wildcard_names_are_supported() {
+        let atoms = [
+            TestAtom {
+                name: "CA",
+                resname: "ALA",
+                resid: 1,
+                index: 0,
+                element: Some("C"),
+                chain_id: "A",
+                segid: "PROT",
+            },
+            TestAtom {
+                name: "CB",
+                resname: "ALA",
+                resid: 1,
+                index: 1,
+                element: Some("C"),
+                chain_id: "A",
+                segid: "PROT",
+            },
+        ];
+        assert_eq!(select(&atoms, "name C?").unwrap().len(), 2);
+        assert_eq!(select(&atoms, "name C*").unwrap().len(), 2);
     }
 
     #[test]
