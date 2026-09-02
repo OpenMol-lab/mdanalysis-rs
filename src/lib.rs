@@ -16,6 +16,7 @@ pub mod dlpoly;
 pub mod fhiaims;
 pub mod formats;
 pub mod geometry;
+pub mod gms;
 pub mod guesser;
 pub mod lammps;
 pub mod mdamath;
@@ -66,6 +67,7 @@ pub use geometry::{
     Matrix3, Vec3, center_of_geometry, center_of_mass, distance, distance_array, rmsd,
     self_distance_array, weighted_rmsd,
 };
+pub use gms::{GmsAtom, GmsData, GmsError, GmsFile, GmsParser, GmsReader, GmsStructure, read_gms};
 pub use guesser::{Guesser, GuesserError, guess_bonds, guess_element, guess_mass};
 pub use lammps::{
     LammpsAtom, LammpsBond, LammpsBox, LammpsData, LammpsDataFile, LammpsError, read_lammps_data,
@@ -106,6 +108,7 @@ pub enum Error {
     Coordinate(CoordinateError),
     Format(formats::FormatError),
     Fhiaims(fhiaims::FhiaimsError),
+    Gms(gms::GmsError),
     Distance(DistanceError),
     Guesser(guesser::GuesserError),
     Selection(selection::SelectionError),
@@ -128,6 +131,7 @@ impl std::fmt::Display for Error {
             Self::Coordinate(error) => write!(f, "coordinate error: {error}"),
             Self::Format(error) => write!(f, "format error: {error}"),
             Self::Fhiaims(error) => write!(f, "FHI-AIMS error: {error}"),
+            Self::Gms(error) => write!(f, "GMS error: {error}"),
             Self::Distance(error) => write!(f, "distance error: {error}"),
             Self::Guesser(error) => write!(f, "guesser error: {error}"),
             Self::Selection(error) => write!(f, "selection error: {error}"),
@@ -213,6 +217,12 @@ impl From<formats::FormatError> for Error {
 impl From<fhiaims::FhiaimsError> for Error {
     fn from(error: fhiaims::FhiaimsError) -> Self {
         Self::Fhiaims(error)
+    }
+}
+
+impl From<gms::GmsError> for Error {
+    fn from(error: gms::GmsError) -> Self {
+        Self::Gms(error)
     }
 }
 
