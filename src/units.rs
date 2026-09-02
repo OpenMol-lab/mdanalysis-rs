@@ -32,6 +32,12 @@ pub const CONSTANTS: &[(&str, f64)] = &[
 /// Look up one of the constants in [`CONSTANTS`].
 #[must_use]
 pub fn constant(name: &str) -> Option<f64> {
+    // Keep the misspelling accepted by MDAnalysis 2.x for source
+    // compatibility. The Python implementation emits a deprecation warning;
+    // Rust callers can migrate by using the correctly-spelled key.
+    if name == "Boltzman_constant" {
+        return Some(BOLTZMANN_CONSTANT);
+    }
     CONSTANTS
         .iter()
         .find_map(|(key, value)| (*key == name).then_some(*value))
@@ -427,6 +433,12 @@ pub enum UnitKind {
     Mass,
 }
 
+#[allow(non_upper_case_globals)]
+impl UnitKind {
+    /// Historical spelling used by callers that call velocity "speed".
+    pub const Speed: Self = Self::Velocity;
+}
+
 impl fmt::Display for UnitKind {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
@@ -575,6 +587,48 @@ impl IntoUnit for MassUnit {
     }
 }
 
+impl From<LengthUnit> for Unit {
+    fn from(unit: LengthUnit) -> Self {
+        Self::Length(unit)
+    }
+}
+
+impl From<TimeUnit> for Unit {
+    fn from(unit: TimeUnit) -> Self {
+        Self::Time(unit)
+    }
+}
+
+impl From<EnergyUnit> for Unit {
+    fn from(unit: EnergyUnit) -> Self {
+        Self::Energy(unit)
+    }
+}
+
+impl From<VelocityUnit> for Unit {
+    fn from(unit: VelocityUnit) -> Self {
+        Self::Velocity(unit)
+    }
+}
+
+impl From<ForceUnit> for Unit {
+    fn from(unit: ForceUnit) -> Self {
+        Self::Force(unit)
+    }
+}
+
+impl From<ChargeUnit> for Unit {
+    fn from(unit: ChargeUnit) -> Self {
+        Self::Charge(unit)
+    }
+}
+
+impl From<MassUnit> for Unit {
+    fn from(unit: MassUnit) -> Self {
+        Self::Mass(unit)
+    }
+}
+
 impl IntoUnit for &str {
     fn into_unit(self) -> Result<Unit, UnitError> {
         Unit::from_str(self)
@@ -584,6 +638,22 @@ impl IntoUnit for &str {
 impl IntoUnit for String {
     fn into_unit(self) -> Result<Unit, UnitError> {
         Unit::from_str(&self)
+    }
+}
+
+impl TryFrom<&str> for Unit {
+    type Error = UnitError;
+
+    fn try_from(name: &str) -> Result<Self, Self::Error> {
+        Self::from_str(name)
+    }
+}
+
+impl TryFrom<String> for Unit {
+    type Error = UnitError;
+
+    fn try_from(name: String) -> Result<Self, Self::Error> {
+        Self::from_str(&name)
     }
 }
 
