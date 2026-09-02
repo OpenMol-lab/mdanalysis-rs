@@ -5,13 +5,18 @@
 //! ([`geometry`]).
 
 pub mod analysis;
+pub mod coordinates;
 pub mod core;
 pub mod geometry;
+pub mod mdamath;
 pub mod pdb;
 pub mod selection;
+pub mod transformations;
+pub mod units;
 
 pub use core::{Atom, AtomGroup, Bond, Frame, Residue, Segment, Topology, Trajectory, Universe};
-pub use geometry::{Vec3, center_of_mass, distance, distance_array, rmsd};
+pub use geometry::{Matrix3, Vec3, center_of_mass, distance, distance_array, rmsd};
+pub use mdamath::{angle, box_volume, dihedral, norm, triclinic_box, triclinic_vectors};
 pub use pdb::{PdbAtom, PdbError, PdbStructure, read_pdb, write_pdb};
 
 pub type Result<T> = std::result::Result<T, Error>;

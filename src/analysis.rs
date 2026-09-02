@@ -33,6 +33,87 @@ pub fn mean_square_displacement(reference: &[[f64; 3]], coordinates: &[[f64; 3]]
     )
 }
 
+/// Per-atom root-mean-square fluctuation over a trajectory.
+pub fn rmsf(frames: &[Vec<[f64; 3]>]) -> Option<Vec<f64>> {
+    let first = frames.first()?;
+    if first.is_empty() || frames.iter().any(|frame| frame.len() != first.len()) {
+        return None;
+    }
+    let mut mean = vec![[0.0; 3]; first.len()];
+    for frame in frames {
+        for (sum, point) in mean.iter_mut().zip(frame) {
+            sum[0] += point[0];
+            sum[1] += point[1];
+            sum[2] += point[2];
+        }
+    }
+    let count = frames.len() as f64;
+    for point in &mut mean {
+        point[0] /= count;
+        point[1] /= count;
+        point[2] /= count;
+    }
+    let mut variance = vec![0.0; first.len()];
+    for frame in frames {
+        for (value, (point, average)) in variance.iter_mut().zip(frame.iter().zip(&mean)) {
+            *value += squared_distance(*point, *average);
+        }
+    }
+    Some(
+        variance
+            .into_iter()
+            .map(|value| (value / count).sqrt())
+            .collect(),
+    )
+}
+
+/// A soft contact fraction, useful for native-contact analysis.
+pub fn soft_cut_q(
+    distances: &[f64],
+    reference: &[f64],
+    beta: f64,
+    lambda_constant: f64,
+) -> Option<f64> {
+    if distances.len() != reference.len() || distances.is_empty() {
+        return None;
+    }
+    let score = distances
+        .iter()
+        .zip(reference)
+        .map(|(&distance, &reference)| {
+            1.0 / (1.0 + (beta * (distance - lambda_constant * reference)).exp())
+        })
+        .sum::<f64>();
+    Some(score / distances.len() as f64)
+}
+
+pub fn hard_cut_q(distances: &[f64], cutoff: f64) -> Option<f64> {
+    if distances.is_empty() {
+        return None;
+    }
+    Some(
+        distances
+            .iter()
+            .filter(|&&distance| distance <= cutoff)
+            .count() as f64
+            / distances.len() as f64,
+    )
+}
+
+pub fn radius_cut_q(distances: &[f64], reference: &[f64], radius: f64) -> Option<f64> {
+    if distances.len() != reference.len() || distances.is_empty() {
+        return None;
+    }
+    Some(
+        distances
+            .iter()
+            .zip(reference)
+            .filter(|(distance, reference)| (**distance - **reference).abs() <= radius)
+            .count() as f64
+            / distances.len() as f64,
+    )
+}
+
 /// Radius of gyration around the (mass-weighted when available) centre.
 pub fn radius_of_gyration(group: &AtomGroup) -> Option<f64> {
     let center = group.center_of_mass()?;
@@ -166,6 +247,14 @@ mod tests {
         let (_, counts) =
             radial_distribution_function(&[[0.0, 0.0, 0.0]], &[[0.5, 0.0, 0.0]], 1.0, 3.0).unwrap();
         assert_eq!(counts, vec![1, 0, 0]);
+    }
+
+    #[test]
+    fn rmsf_and_contact_scores_are_normalized() {
+        let values = rmsf(&[vec![[0.0, 0.0, 0.0]], vec![[2.0, 0.0, 0.0]]]).unwrap();
+        assert_eq!(values, vec![1.0]);
+        assert_eq!(hard_cut_q(&[1.0, 3.0], 2.0), Some(0.5));
+        assert_eq!(radius_cut_q(&[1.0, 3.0], &[1.2, 4.0], 0.3), Some(0.5));
     }
 
     #[test]
