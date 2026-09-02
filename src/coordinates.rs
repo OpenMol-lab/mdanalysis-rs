@@ -443,11 +443,8 @@ fn write_gro_document<W: Write>(
                 "GRO atom id {atom_id} does not fit the five-column field"
             )));
         }
-        let residue_name = fit_field(
-            frame.residue_names.get(index).map_or("UNK", String::as_str),
-            5,
-        );
-        let atom_name = fit_field(frame.names.get(index).map_or("X", String::as_str), 5);
+        let residue_name = fit_field(nonempty_metadata(frame.residue_names.get(index), "UNK"), 5);
+        let atom_name = fit_field(nonempty_metadata(frame.names.get(index), "X"), 5);
         if !(-99_999..=99_999).contains(&residue_id) {
             return Err(CoordinateError::InvalidStructure(format!(
                 "GRO residue id {residue_id} does not fit the five-column field"
@@ -478,7 +475,9 @@ fn write_gro_document<W: Write>(
             "GRO box contains non-finite lengths".to_owned(),
         ));
     }
-    if is_orthorhombic(dimensions) {
+    if dimensions[..3].iter().all(|value| *value == 0.0) {
+        writeln!(writer, "{:10.5}{:10.5}{:10.5}", 0.0, 0.0, 0.0)?;
+    } else if is_orthorhombic(dimensions) {
         writeln!(
             writer,
             "{:10.5}{:10.5}{:10.5}",
@@ -696,6 +695,13 @@ fn fit_field(value: &str, width: usize) -> String {
     value.trim().chars().take(width).collect()
 }
 
+fn nonempty_metadata<'a>(value: Option<&'a String>, default: &'a str) -> &'a str {
+    value
+        .map(String::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or(default)
+}
+
 fn fixed_field(line: &str, start: usize, end: usize) -> &str {
     let bytes = line.as_bytes();
     if start >= bytes.len() {
@@ -815,6 +821,22 @@ mod tests {
             parsed.frames[0].dimensions.unwrap(),
             [2.0, 3.0, 4.0, 90.0, 90.0, 90.0]
         );
+    }
+
+    #[test]
+    fn gro_writer_falls_back_for_empty_metadata_and_zero_box() {
+        let mut frame = CoordinateFrame::new(vec![[0.0, 0.0, 0.0]]);
+        frame.names = vec![String::new()];
+        frame.residue_names = vec![String::new()];
+        frame.dimensions = Some([0.0; 6]);
+        let text = CoordinateFile::new(vec![frame]).to_gro_string().unwrap();
+        assert!(
+            text.lines()
+                .nth(2)
+                .is_some_and(|line| line.contains("UNK") && line.contains("X"))
+        );
+        let parsed = CoordinateFile::from_gro_str(&text).unwrap();
+        assert_eq!(parsed.frames[0].dimensions.unwrap()[..3], [0.0, 0.0, 0.0]);
     }
 
     #[test]
