@@ -173,23 +173,43 @@ impl Selection {
         atoms: &'a [A],
         bonds: &[(usize, usize)],
         groups: &[(&str, &[usize])],
-        global_atoms: Option<&'a [A]>,
+        global_atoms: Option<&[A]>,
     ) -> Result<Vec<&'a A>, SelectionError> {
         self.validate_groups(groups)?;
-        let evaluation_atoms = if self.expression.contains_global() {
-            global_atoms.unwrap_or(atoms)
+        Ok(atoms
+            .iter()
+            .filter(|atom| {
+                self.expression
+                    .matches_with_context(*atom, atoms, bonds, groups, global_atoms)
+            })
+            .collect())
+    }
+
+    /// Apply a selection where a root `global` modifier changes the output
+    /// scope to `global_atoms`. Nested `global` modifiers, such as those in an
+    /// `around` expression, still return atoms from the local scope.
+    pub fn apply_with_global_scope<'a, A: AtomLike>(
+        &self,
+        atoms: &'a [A],
+        bonds: &[(usize, usize)],
+        groups: &[(&str, &[usize])],
+        global_atoms: &'a [A],
+    ) -> Result<Vec<&'a A>, SelectionError> {
+        self.validate_groups(groups)?;
+        let output_atoms = if self.expression_is_global_root() {
+            global_atoms
         } else {
             atoms
         };
-        Ok(evaluation_atoms
+        Ok(output_atoms
             .iter()
             .filter(|atom| {
                 self.expression.matches_with_context(
                     *atom,
-                    evaluation_atoms,
+                    output_atoms,
                     bonds,
                     groups,
-                    global_atoms,
+                    Some(global_atoms),
                 )
             })
             .collect())
@@ -211,8 +231,8 @@ impl Selection {
         self.apply(atoms)
     }
 
-    pub(crate) fn expression_contains_global(&self) -> bool {
-        self.expression.contains_global()
+    pub(crate) fn expression_is_global_root(&self) -> bool {
+        matches!(self.expression, Expr::Global(_))
     }
 }
 
@@ -251,11 +271,11 @@ pub fn select_with_bonds_and_groups<'a, A: AtomLike>(
     groups: &[(&str, &[usize])],
     global_atoms: Option<&'a [A]>,
 ) -> Result<Vec<&'a A>, SelectionError> {
-    Selection::parse(expression)?.apply_with_bonds_and_groups_and_global_atoms(
+    Selection::parse(expression)?.apply_with_global_scope(
         atoms,
         bonds,
         groups,
-        global_atoms,
+        global_atoms.unwrap_or(atoms),
     )
 }
 

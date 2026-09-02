@@ -494,16 +494,24 @@ impl AtomGroup {
             .map(|(name, indices)| (*name, indices.as_slice()))
             .collect();
         let selection = Selection::parse(expression)?;
-        let selected = if selection.expression_contains_global() {
+        let selected = if selection.expression_is_global_root() {
             let global_atoms: Vec<Atom> = groups
                 .iter()
                 .flat_map(|(_, group)| group.atoms.iter().cloned())
                 .collect();
-            selection.apply_with_bonds_and_groups(&global_atoms, &[], &group_slices)?
+            selection
+                .apply_with_global_scope(&global_atoms, &[], &group_slices, &global_atoms)?
+                .into_iter()
+                .cloned()
+                .collect()
         } else {
-            selection.apply_with_bonds_and_groups(&self.atoms, &[], &group_slices)?
+            selection
+                .apply_with_bonds_and_groups(&self.atoms, &[], &group_slices)?
+                .into_iter()
+                .cloned()
+                .collect()
         };
-        Ok(Self::new(selected.into_iter().cloned().collect()))
+        Ok(Self::new(selected))
     }
 
     pub fn get(&self, index: usize) -> Option<&Atom> {
