@@ -522,6 +522,18 @@ impl Universe {
 
     /// Write the current topology and all trajectory frames as a PDB file.
     pub fn write_pdb(&self, path: impl AsRef<Path>) -> crate::Result<()> {
+        let first_positions = self
+            .trajectory
+            .frames
+            .first()
+            .map(|frame| frame.positions.clone())
+            .unwrap_or_else(|| {
+                self.topology
+                    .atoms
+                    .iter()
+                    .map(|atom| atom.position)
+                    .collect()
+            });
         let atoms = self
             .topology
             .atoms
@@ -535,9 +547,9 @@ impl Universe {
                 chain_id: atom.chain_id.chars().next(),
                 residue_sequence: atom.resid,
                 insertion_code: None,
-                x: atom.position[0],
-                y: atom.position[1],
-                z: atom.position[2],
+                x: first_positions.get(index).unwrap_or(&atom.position)[0],
+                y: first_positions.get(index).unwrap_or(&atom.position)[1],
+                z: first_positions.get(index).unwrap_or(&atom.position)[2],
                 occupancy: atom.occupancy,
                 temperature_factor: atom.temp_factor,
                 element: atom.element.clone(),
@@ -551,17 +563,37 @@ impl Universe {
             .iter()
             .map(|frame| frame.positions.clone())
             .collect();
+        let cryst1 = self
+            .trajectory
+            .frames
+            .first()
+            .and_then(|frame| frame.dimensions)
+            .map(|dimensions| crate::pdb::PdbCryst1 {
+                a: dimensions[0],
+                b: dimensions[1],
+                c: dimensions[2],
+                alpha: dimensions[3],
+                beta: dimensions[4],
+                gamma: dimensions[5],
+                space_group: "P 1".to_string(),
+                z: None,
+            });
         PdbStructure {
             atoms,
             frames,
-            cryst1: None,
+            cryst1,
         }
         .write_file(path)?;
         Ok(())
     }
 
     pub fn atoms(&self) -> AtomGroup {
-        AtomGroup::new(self.topology.atoms.clone())
+        let positions = self.positions();
+        let mut atoms = self.topology.atoms.clone();
+        for (atom, position) in atoms.iter_mut().zip(positions) {
+            atom.position = position;
+        }
+        AtomGroup::new(atoms)
     }
 
     pub fn select_atoms(&self, expression: &str) -> Result<AtomGroup, SelectionError> {
@@ -662,5 +694,22 @@ mod tests {
                 .add_frame(Frame::new(vec![[0.0, 0.0, 0.0]]))
                 .is_err()
         );
+    }
+
+    #[test]
+    fn atom_group_tracks_current_trajectory_frame() {
+        let mut universe = sample();
+        universe
+            .add_frame(Frame::new(vec![[5.0, 0.0, 0.0], [6.0, 0.0, 0.0]]))
+            .unwrap();
+        assert_eq!(
+            universe.trajectory.next_frame().unwrap().positions[0],
+            [0.0, 0.0, 0.0]
+        );
+        assert_eq!(
+            universe.trajectory.next_frame().unwrap().positions[0],
+            [5.0, 0.0, 0.0]
+        );
+        assert_eq!(universe.atoms().positions()[0], [5.0, 0.0, 0.0]);
     }
 }

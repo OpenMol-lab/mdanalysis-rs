@@ -8,6 +8,7 @@ pub mod analysis;
 pub mod analysis_algorithms;
 pub mod coordinates;
 pub mod core;
+pub mod distances;
 pub mod formats;
 pub mod geometry;
 pub mod mdamath;
@@ -21,6 +22,11 @@ pub use analysis_algorithms::{kabsch_fit, kabsch_rmsd, rmsd_array};
 pub use coordinates::{CoordinateError, CoordinateFile, CoordinateFrame};
 pub use coordinates::{read_gro, read_xyz, write_gro, write_xyz};
 pub use core::{Atom, AtomGroup, Bond, Frame, Residue, Segment, Topology, Trajectory, Universe};
+pub use distances::{
+    DistanceError, PairDistances, calc_angle, calc_angles, calc_bond, calc_bonds, calc_dihedral,
+    calc_dihedrals, capped_distance, distance_array as coordinate_distance_array,
+    self_capped_distance, self_distance_array as coordinate_self_distance_array,
+};
 pub use formats::{FormatAtom, FormatBond, FormatError, Structure};
 pub use geometry::{Matrix3, Vec3, center_of_mass, distance, distance_array, rmsd};
 pub use mdamath::{angle, box_volume, dihedral, norm, triclinic_box, triclinic_vectors};
@@ -35,6 +41,7 @@ pub enum Error {
     Pdb(PdbError),
     Coordinate(CoordinateError),
     Format(formats::FormatError),
+    Distance(DistanceError),
     Selection(selection::SelectionError),
     InvalidInput(String),
 }
@@ -46,6 +53,7 @@ impl std::fmt::Display for Error {
             Self::Pdb(error) => write!(f, "PDB error: {error}"),
             Self::Coordinate(error) => write!(f, "coordinate error: {error}"),
             Self::Format(error) => write!(f, "format error: {error}"),
+            Self::Distance(error) => write!(f, "distance error: {error}"),
             Self::Selection(error) => write!(f, "selection error: {error}"),
             Self::InvalidInput(message) => f.write_str(message),
         }
@@ -75,6 +83,12 @@ impl From<CoordinateError> for Error {
 impl From<formats::FormatError> for Error {
     fn from(error: formats::FormatError) -> Self {
         Self::Format(error)
+    }
+}
+
+impl From<DistanceError> for Error {
+    fn from(error: DistanceError) -> Self {
+        Self::Distance(error)
     }
 }
 
