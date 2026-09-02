@@ -401,7 +401,8 @@ fn parse_gro(input: &str) -> Result<CoordinateFile, CoordinateError> {
     }
     let box_line_number = atom_count + 3;
     let box_fields = parse_box_fields(lines[atom_count + 2], box_line_number)?;
-    frame.dimensions = Some(box_to_dimensions(&box_fields, box_line_number)?);
+    let dimensions = box_to_dimensions(&box_fields, box_line_number)?;
+    frame.dimensions = (!dimensions[..3].iter().all(|value| *value == 0.0)).then_some(dimensions);
     frame.velocities = any_velocity.then_some(velocities);
     Ok(CoordinateFile::new(vec![frame]))
 }
@@ -434,7 +435,7 @@ fn write_gro_document<W: Write>(
         }
         if position
             .iter()
-            .any(|value| *value <= -999.9995 || *value > 9_999.9995)
+            .any(|value| *value <= -999.9995 || *value > 9_999.999_5)
         {
             return Err(CoordinateError::InvalidStructure(format!(
                 "GRO atom {} coordinate is outside the representable range",
@@ -845,7 +846,7 @@ mod tests {
                 .is_some_and(|line| line.contains("UNK") && line.contains("X"))
         );
         let parsed = CoordinateFile::from_gro_str(&text).unwrap();
-        assert_eq!(parsed.frames[0].dimensions.unwrap()[..3], [0.0, 0.0, 0.0]);
+        assert_eq!(parsed.frames[0].dimensions, None);
     }
 
     #[test]
