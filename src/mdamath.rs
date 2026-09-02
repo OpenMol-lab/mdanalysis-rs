@@ -61,6 +61,9 @@ pub fn triclinic_box(vectors: [[f64; 3]; 3]) -> [f64; 6] {
     let b = Vec3::from(vectors[1]);
     let c = Vec3::from(vectors[2]);
     let lengths = [a.norm(), b.norm(), c.norm()];
+    if lengths.iter().any(|length| *length <= f64::EPSILON) {
+        return [0.0; 6];
+    }
     let alpha = b
         .dot(c)
         .clamp(-lengths[1] * lengths[2], lengths[1] * lengths[2]);
