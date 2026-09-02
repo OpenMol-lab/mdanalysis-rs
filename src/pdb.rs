@@ -40,6 +40,26 @@ impl PdbAtom {
         [self.x, self.y, self.z]
     }
 
+    #[must_use]
+    pub const fn resid(&self) -> i32 {
+        self.residue_sequence
+    }
+
+    #[must_use]
+    pub fn resname(&self) -> &str {
+        &self.residue_name
+    }
+
+    #[must_use]
+    pub fn chain(&self) -> Option<char> {
+        self.chain_id
+    }
+
+    #[must_use]
+    pub const fn temp_factor(&self) -> Option<f64> {
+        self.temperature_factor
+    }
+
     fn with_position(&self, position: [f64; 3]) -> Self {
         let mut atom = self.clone();
         atom.x = position[0];
@@ -105,6 +125,11 @@ impl PdbStructure {
     /// Return the coordinates for a frame, if it exists.
     pub fn frame(&self, index: usize) -> Option<&[[f64; 3]]> {
         self.frames.get(index).map(Vec::as_slice)
+    }
+
+    #[must_use]
+    pub fn positions(&self) -> Option<&[[f64; 3]]> {
+        self.frame(0)
     }
 
     /// Return atoms for a frame, combining its coordinates with first-frame
