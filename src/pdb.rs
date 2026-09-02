@@ -275,6 +275,16 @@ impl std::str::FromStr for PdbStructure {
     }
 }
 
+/// Read a PDB structure from a filesystem path.
+pub fn read_pdb<P: AsRef<Path>>(path: P) -> Result<PdbStructure, PdbError> {
+    PdbStructure::read_file(path)
+}
+
+/// Write a PDB structure to a filesystem path.
+pub fn write_pdb<P: AsRef<Path>>(path: P, structure: &PdbStructure) -> Result<(), PdbError> {
+    structure.write_file(path)
+}
+
 fn validate_frame(structure: &PdbStructure, index: usize) -> Result<(), PdbError> {
     let found = structure.frames[index].len();
     if found != structure.atoms.len() {
