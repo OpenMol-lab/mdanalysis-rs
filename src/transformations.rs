@@ -251,7 +251,10 @@ pub fn wrapped_positions(coordinates: &[Vec3], box_lengths: Vec3) -> Vec<Vec3> {
 /// converted to fractional coordinates, wrapped modulo one, then converted
 /// back to Cartesian coordinates.  Singular box matrices are ignored.
 pub fn wrap_positions_triclinic(coordinates: &mut [Vec3], box_vectors: Matrix3) {
-    let Some(inverse) = box_vectors.inverse() else {
+    // `Matrix3` multiplies column vectors, while the lattice vectors are
+    // stored as rows (the convention used by `mdamath::triclinic_vectors`).
+    let lattice = box_vectors.transpose();
+    let Some(inverse) = lattice.inverse() else {
         return;
     };
     for coordinate in coordinates {
@@ -261,7 +264,7 @@ pub fn wrap_positions_triclinic(coordinates: &mut [Vec3], box_vectors: Matrix3) 
             fractional.y.rem_euclid(1.0),
             fractional.z.rem_euclid(1.0),
         );
-        *coordinate = box_vectors * wrapped;
+        *coordinate = lattice * wrapped;
     }
 }
 
@@ -470,7 +473,11 @@ mod tests {
         let box_vectors = Matrix3::new([[2.0, 0.0, 0.0], [0.5, 2.0, 0.0], [0.0, 0.0, 3.0]]);
         let mut points = [Vec3::new(2.4, 2.1, -0.5)];
         wrap_positions_triclinic(&mut points, box_vectors);
-        let fractional = box_vectors.inverse().expect("box is invertible") * points[0];
+        let fractional = box_vectors
+            .transpose()
+            .inverse()
+            .expect("box is invertible")
+            * points[0];
         assert!((0.0..1.0).contains(&fractional.x));
         assert!((0.0..1.0).contains(&fractional.y));
         assert!((0.0..1.0).contains(&fractional.z));
