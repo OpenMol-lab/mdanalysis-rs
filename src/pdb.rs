@@ -406,15 +406,16 @@ fn parse_conect(line: &str, line_number: usize) -> Result<Vec<PdbBond>, PdbError
     // PDB CONECT records use five-column integer fields, but accepting
     // whitespace-separated fields also handles common hand-written files.
     if bytes.len() > 6 {
-        for chunk in bytes[6..].chunks(5) {
-            let value = std::str::from_utf8(chunk).unwrap_or("").trim();
-            if value.is_empty() {
-                continue;
-            }
-            values.push(value.parse::<u32>().map_err(|error| PdbError::Parse {
-                line: line_number,
-                message: format!("invalid CONECT atom serial {value:?}: {error}"),
-            })?);
+        let fixed_values = bytes[6..]
+            .chunks(5)
+            .filter_map(|chunk| {
+                let value = std::str::from_utf8(chunk).unwrap_or("").trim();
+                (!value.is_empty()).then_some(value)
+            })
+            .map(|value| value.parse::<u32>())
+            .collect::<Result<Vec<_>, _>>();
+        if let Ok(fixed_values) = fixed_values {
+            values = fixed_values;
         }
     }
     if values.len() < 2 {
@@ -688,6 +689,12 @@ mod tests {
         assert_eq!(structure.bonds, vec![PdbBond::new(1, 2)]);
         let reparsed = PdbStructure::from_str(&structure.to_pdb_string().unwrap()).unwrap();
         assert_eq!(reparsed.bonds, structure.bonds);
+
+        let compact = input.replace("CONECT    1    2", "CONECT 1 2");
+        assert_eq!(
+            PdbStructure::from_str(&compact).unwrap().bonds,
+            vec![PdbBond::new(1, 2)]
+        );
     }
 
     #[test]
