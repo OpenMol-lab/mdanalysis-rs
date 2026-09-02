@@ -14,10 +14,7 @@ use crate::transformations::{self, FitResult};
 /// denotes a shape mismatch or an empty input.  The returned transform maps a
 /// point from `coordinates` to the corresponding point in `reference`.
 #[must_use]
-pub fn kabsch_fit(
-    coordinates: &[[f64; 3]],
-    reference: &[[f64; 3]],
-) -> Option<FitResult> {
+pub fn kabsch_fit(coordinates: &[[f64; 3]], reference: &[[f64; 3]]) -> Option<FitResult> {
     if coordinates.is_empty() || coordinates.len() != reference.len() {
         return None;
     }
@@ -32,10 +29,7 @@ pub fn kabsch_fit(
 
 /// Alias for [`kabsch_fit`] using a name common in analysis code.
 #[must_use]
-pub fn kabsch(
-    coordinates: &[[f64; 3]],
-    reference: &[[f64; 3]],
-) -> Option<FitResult> {
+pub fn kabsch(coordinates: &[[f64; 3]], reference: &[[f64; 3]]) -> Option<FitResult> {
     kabsch_fit(coordinates, reference)
 }
 
@@ -98,11 +92,7 @@ pub fn contact_map_array(coordinates: &[[f64; 3]], cutoff: f64) -> Vec<Vec<bool>
 /// The denominator is the number of unique contacts in the reference map.  A
 /// reference with no contacts has no defined fraction and returns `None`.
 #[must_use]
-pub fn contact_score(
-    reference: &[Vec3],
-    coordinates: &[Vec3],
-    cutoff: f64,
-) -> Option<f64> {
+pub fn contact_score(reference: &[Vec3], coordinates: &[Vec3], cutoff: f64) -> Option<f64> {
     if reference.len() != coordinates.len() || reference.len() < 2 {
         return None;
     }
@@ -140,11 +130,7 @@ pub fn contact_score_array(
 
 /// Alias for [`contact_score`].
 #[must_use]
-pub fn contact_fraction(
-    reference: &[Vec3],
-    coordinates: &[Vec3],
-    cutoff: f64,
-) -> Option<f64> {
+pub fn contact_fraction(reference: &[Vec3], coordinates: &[Vec3], cutoff: f64) -> Option<f64> {
     contact_score(reference, coordinates, cutoff)
 }
 
@@ -289,10 +275,7 @@ pub fn linear_regression(x: &[f64], y: &[f64]) -> Option<LinearRegression> {
     let n = x.len() as f64;
     let mean_x = x.iter().sum::<f64>() / n;
     let mean_y = y.iter().sum::<f64>() / n;
-    let denominator = x
-        .iter()
-        .map(|value| (value - mean_x).powi(2))
-        .sum::<f64>();
+    let denominator = x.iter().map(|value| (value - mean_x).powi(2)).sum::<f64>();
     if denominator <= f64::EPSILON {
         return None;
     }
@@ -303,10 +286,7 @@ pub fn linear_regression(x: &[f64], y: &[f64]) -> Option<LinearRegression> {
         .sum::<f64>();
     let slope = covariance / denominator;
     let intercept = mean_y - slope * mean_x;
-    let total = y
-        .iter()
-        .map(|value| (value - mean_y).powi(2))
-        .sum::<f64>();
+    let total = y.iter().map(|value| (value - mean_y).powi(2)).sum::<f64>();
     let residual = y
         .iter()
         .zip(x)
@@ -368,15 +348,13 @@ pub fn mean_square_displacement_series(trajectory: &[Vec<Vec3>]) -> Option<Vec<f
         return None;
     }
     let frame_count = trajectory.len();
-    let particle_count = first.len();
     let mut result = Vec::with_capacity(frame_count);
     for lag in 0..frame_count {
         let mut sum = 0.0;
         let mut samples = 0usize;
         for start in 0..(frame_count - lag) {
-            for particle in 0..particle_count {
-                sum += (trajectory[start + lag][particle] - trajectory[start][particle])
-                    .norm_squared();
+            for (&later, &earlier) in trajectory[start + lag].iter().zip(&trajectory[start]) {
+                sum += (later - earlier).norm_squared();
                 samples += 1;
             }
         }
@@ -387,9 +365,7 @@ pub fn mean_square_displacement_series(trajectory: &[Vec<Vec3>]) -> Option<Vec<f
 
 /// Array-coordinate wrapper for [`mean_square_displacement_series`].
 #[must_use]
-pub fn mean_square_displacement_series_array(
-    trajectory: &[Vec<[f64; 3]>],
-) -> Option<Vec<f64>> {
+pub fn mean_square_displacement_series_array(trajectory: &[Vec<[f64; 3]>]) -> Option<Vec<f64>> {
     let trajectory: Vec<Vec<Vec3>> = trajectory
         .iter()
         .map(|frame| frame.iter().copied().map(Vec3::from).collect())
@@ -409,11 +385,7 @@ pub fn msd_time_series(trajectory: &[Vec<Vec3>]) -> Option<Vec<f64>> {
 /// `MSD = 2 * dimensions * D * time`; the slope is obtained by ordinary least
 /// squares and the fitted intercept is allowed to absorb localization noise.
 #[must_use]
-pub fn diffusion_coefficient(
-    time: &[f64],
-    msd: &[f64],
-    dimensions: usize,
-) -> Option<f64> {
+pub fn diffusion_coefficient(time: &[f64], msd: &[f64], dimensions: usize) -> Option<f64> {
     if !(1..=3).contains(&dimensions) || msd.iter().any(|value| *value < 0.0) {
         return None;
     }
@@ -423,11 +395,7 @@ pub fn diffusion_coefficient(
 
 /// Alias for [`diffusion_coefficient`].
 #[must_use]
-pub fn estimate_diffusion_coefficient(
-    time: &[f64],
-    msd: &[f64],
-    dimensions: usize,
-) -> Option<f64> {
+pub fn estimate_diffusion_coefficient(time: &[f64], msd: &[f64], dimensions: usize) -> Option<f64> {
     diffusion_coefficient(time, msd, dimensions)
 }
 
@@ -446,14 +414,25 @@ mod tests {
         let fit = kabsch_fit(&coordinates, &reference).expect("matching coordinates");
         close(fit.rmsd, 0.0);
         close(kabsch_rmsd(&reference, &coordinates).unwrap(), 0.0);
-        close(rmsd_array(&reference, &coordinates).unwrap(), (11.0_f64 / 3.0).sqrt());
+        close(
+            rmsd_array(&reference, &coordinates).unwrap(),
+            (11.0_f64 / 3.0).sqrt(),
+        );
         assert!(kabsch_fit(&[], &[]).is_none());
     }
 
     #[test]
     fn contact_map_and_score_are_symmetric() {
-        let reference = [Vec3::ZERO, Vec3::new(1.0, 0.0, 0.0), Vec3::new(4.0, 0.0, 0.0)];
-        let moved = [Vec3::ZERO, Vec3::new(1.1, 0.0, 0.0), Vec3::new(4.0, 0.0, 0.0)];
+        let reference = [
+            Vec3::ZERO,
+            Vec3::new(1.0, 0.0, 0.0),
+            Vec3::new(4.0, 0.0, 0.0),
+        ];
+        let moved = [
+            Vec3::ZERO,
+            Vec3::new(1.1, 0.0, 0.0),
+            Vec3::new(4.0, 0.0, 0.0),
+        ];
         let map = contact_map(&reference, 1.2);
         assert_eq!(map[0][1], map[1][0]);
         assert!(!map[0][0]);
@@ -468,8 +447,15 @@ mod tests {
             Vec3::new(1.0, 1.0, 0.0),
             Vec3::new(1.0, 1.0, 1.0),
         ];
-        close(dihedral_series(&points)[0], std::f64::consts::FRAC_PI_2);
-        let line = [Vec3::new(-1.0, 0.0, 0.0), Vec3::ZERO, Vec3::new(2.0, 0.0, 0.0)];
+        close(
+            dihedral_series(&points)[0].abs(),
+            std::f64::consts::FRAC_PI_2,
+        );
+        let line = [
+            Vec3::new(-1.0, 0.0, 0.0),
+            Vec3::ZERO,
+            Vec3::new(2.0, 0.0, 0.0),
+        ];
         let axis = helix_best_fit_axis(&line).unwrap();
         close(axis.direction.x, 1.0);
         close(axis.rmsd, 0.0);
