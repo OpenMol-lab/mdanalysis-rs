@@ -203,6 +203,117 @@ pub struct CenterOfMassAnalysis {
     values: Vec<[f64; 3]>,
 }
 
+/// Collect RMSD values against a fixed reference frame.
+#[derive(Clone, Debug)]
+pub struct RmsdAnalysis {
+    reference: Vec<[f64; 3]>,
+    superposition: bool,
+    values: Vec<f64>,
+}
+
+impl RmsdAnalysis {
+    pub fn new(reference: Vec<[f64; 3]>) -> Self {
+        Self {
+            reference,
+            superposition: false,
+            values: Vec::new(),
+        }
+    }
+
+    pub fn with_superposition(mut self, enabled: bool) -> Self {
+        self.superposition = enabled;
+        self
+    }
+
+    pub fn values(&self) -> &[f64] {
+        &self.values
+    }
+}
+
+impl Analysis for RmsdAnalysis {
+    type Output = Vec<f64>;
+
+    fn process_frame(&mut self, frame: &Frame) -> Result<(), String> {
+        if frame.positions.len() != self.reference.len() {
+            return Err("reference and frame coordinate lengths differ".to_string());
+        }
+        let value = if self.superposition {
+            crate::analysis_algorithms::kabsch_rmsd(&self.reference, &frame.positions)
+                .ok_or_else(|| "cannot superpose empty coordinates".to_string())?
+        } else {
+            mean_square_displacement(&self.reference, &frame.positions)
+                .ok_or_else(|| "cannot calculate RMSD".to_string())?
+                .sqrt()
+        };
+        self.values.push(value);
+        Ok(())
+    }
+
+    fn finalize(self) -> Self::Output {
+        self.values
+    }
+}
+
+/// Collect root-mean-square fluctuations over all trajectory frames.
+#[derive(Clone, Debug, Default)]
+pub struct RmsfAnalysis {
+    frames: Vec<Vec<[f64; 3]>>,
+}
+
+impl RmsfAnalysis {
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+impl Analysis for RmsfAnalysis {
+    type Output = Vec<f64>;
+
+    fn process_frame(&mut self, frame: &Frame) -> Result<(), String> {
+        if self
+            .frames
+            .first()
+            .is_some_and(|first| first.len() != frame.positions.len())
+        {
+            return Err("trajectory frames contain different atom counts".to_string());
+        }
+        self.frames.push(frame.positions.clone());
+        Ok(())
+    }
+
+    fn finalize(self) -> Self::Output {
+        rmsf(&self.frames).unwrap_or_default()
+    }
+}
+
+/// Collect mean-square displacement values for each frame relative to the
+/// first frame. The output uses the same order as the input trajectory.
+#[derive(Clone, Debug, Default)]
+pub struct MeanSquareDisplacementAnalysis {
+    reference: Option<Vec<[f64; 3]>>,
+    values: Vec<f64>,
+}
+
+impl Analysis for MeanSquareDisplacementAnalysis {
+    type Output = Vec<f64>;
+
+    fn process_frame(&mut self, frame: &Frame) -> Result<(), String> {
+        if self.reference.is_none() {
+            self.reference = Some(frame.positions.clone());
+        }
+        let reference = self.reference.as_ref().expect("reference was initialized");
+        self.values.push(
+            mean_square_displacement(reference, &frame.positions)
+                .ok_or_else(|| "trajectory frame lengths differ".to_string())?,
+        );
+        Ok(())
+    }
+
+    fn finalize(self) -> Self::Output {
+        self.values
+    }
+}
+
 impl CenterOfMassAnalysis {
     pub fn new(masses: Vec<f64>) -> Self {
         Self {
@@ -289,5 +400,25 @@ mod tests {
             .run(&trajectory)
             .unwrap();
         assert_eq!(result, vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]]);
+    }
+
+    #[test]
+    fn frame_analysis_wrappers_collect_expected_values() {
+        let trajectory = Trajectory::new(vec![
+            Frame::new(vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]]),
+            Frame::new(vec![[1.0, 0.0, 0.0], [2.0, 0.0, 0.0]]),
+        ]);
+        let rmsd = RmsdAnalysis::new(trajectory.frames[0].positions.clone())
+            .run(&trajectory)
+            .unwrap();
+        assert_eq!(rmsd, vec![0.0, 1.0]);
+        let msd = MeanSquareDisplacementAnalysis::default()
+            .run(&trajectory)
+            .unwrap();
+        assert_eq!(msd, vec![0.0, 1.0]);
+        assert_eq!(
+            RmsfAnalysis::new().run(&trajectory).unwrap(),
+            vec![0.5, 0.5]
+        );
     }
 }

@@ -11,6 +11,7 @@ pub mod core;
 pub mod distances;
 pub mod formats;
 pub mod geometry;
+pub mod guesser;
 pub mod mdamath;
 pub mod pdb;
 pub mod selection;
@@ -18,6 +19,9 @@ pub mod topology_groups;
 pub mod transformations;
 pub mod units;
 
+pub use analysis::{
+    Analysis, CenterOfMassAnalysis, MeanSquareDisplacementAnalysis, RmsdAnalysis, RmsfAnalysis,
+};
 pub use analysis_algorithms::{kabsch_fit, kabsch_rmsd, rmsd_array};
 pub use coordinates::{CoordinateError, CoordinateFile, CoordinateFrame};
 pub use coordinates::{read_gro, read_xyz, write_gro, write_xyz};
@@ -35,6 +39,7 @@ pub use geometry::{
     Matrix3, Vec3, center_of_geometry, center_of_mass, distance, distance_array, rmsd,
     self_distance_array, weighted_rmsd,
 };
+pub use guesser::{Guesser, GuesserError, guess_bonds, guess_element, guess_mass};
 pub use mdamath::{angle, box_volume, dihedral, norm, triclinic_box, triclinic_vectors};
 pub use pdb::{PdbAtom, PdbCryst1, PdbError, PdbStructure, read_pdb, write_pdb};
 pub use topology_groups::{AngleValue, BondLength, DihedralValue, TopologyGroupExt};
@@ -48,6 +53,7 @@ pub enum Error {
     Coordinate(CoordinateError),
     Format(formats::FormatError),
     Distance(DistanceError),
+    Guesser(guesser::GuesserError),
     Selection(selection::SelectionError),
     InvalidInput(String),
 }
@@ -60,6 +66,7 @@ impl std::fmt::Display for Error {
             Self::Coordinate(error) => write!(f, "coordinate error: {error}"),
             Self::Format(error) => write!(f, "format error: {error}"),
             Self::Distance(error) => write!(f, "distance error: {error}"),
+            Self::Guesser(error) => write!(f, "guesser error: {error}"),
             Self::Selection(error) => write!(f, "selection error: {error}"),
             Self::InvalidInput(message) => f.write_str(message),
         }
@@ -95,6 +102,12 @@ impl From<formats::FormatError> for Error {
 impl From<DistanceError> for Error {
     fn from(error: DistanceError) -> Self {
         Self::Distance(error)
+    }
+}
+
+impl From<guesser::GuesserError> for Error {
+    fn from(error: guesser::GuesserError) -> Self {
+        Self::Guesser(error)
     }
 }
 
