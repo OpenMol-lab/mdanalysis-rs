@@ -1047,14 +1047,30 @@ impl Universe {
 }
 
 fn infer_element(name: &str) -> Option<String> {
-    let letters: String = name.chars().filter(char::is_ascii_alphabetic).collect();
+    let letters = name
+        .split(|character: char| !character.is_ascii_alphabetic())
+        .find(|part| !part.is_empty())
+        .unwrap_or_default()
+        .to_string();
     if letters.is_empty() {
         None
     } else {
         let upper = letters.to_ascii_uppercase();
         let two_letter = matches!(
             upper.as_str(),
-            "CL" | "BR" | "NA" | "MG" | "FE" | "ZN" | "CU" | "MN" | "LI" | "SI"
+            "CL" | "BR"
+                | "NA"
+                | "MG"
+                | "FE"
+                | "ZN"
+                | "CU"
+                | "MN"
+                | "LI"
+                | "SI"
+                | "CR"
+                | "CO"
+                | "NI"
+                | "AL"
         );
         Some(if two_letter {
             upper.chars().take(2).collect()
@@ -1173,6 +1189,31 @@ mod tests {
         let universe = Universe::from_pdb_str(pdb).unwrap();
         assert_eq!(universe.topology.atoms[0].element.as_deref(), Some("Cu"));
         assert!((universe.topology.atoms[0].mass - 63.546).abs() < 1e-6);
+    }
+
+    #[test]
+    fn mol2_two_letter_elements_are_inferred_from_atom_types() {
+        let mol2 = concat!(
+            "@<TRIPOS>MOLECULE\n",
+            "metals\n",
+            "2 0 0 0 0\n",
+            "SMALL\nUSER_CHARGES\n\n",
+            "@<TRIPOS>ATOM\n",
+            "1 Cr1 0 0 0 Cr.th 1 MET 0\n",
+            "2 Co1 1 0 0 Co.oh 1 MET 0\n",
+        );
+        let universe = Universe::from_mol2_str(mol2).unwrap();
+        assert_eq!(
+            universe
+                .topology
+                .atoms
+                .iter()
+                .map(|atom| atom.element.as_deref())
+                .collect::<Vec<_>>(),
+            vec![Some("CR"), Some("CO")]
+        );
+        assert!((universe.topology.atoms[0].mass - 51.996).abs() < 1e-6);
+        assert!((universe.topology.atoms[1].mass - 58.933).abs() < 1e-6);
     }
 
     #[test]
