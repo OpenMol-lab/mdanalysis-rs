@@ -31,6 +31,11 @@ pub struct CoordinateFrame {
     pub atom_ids: Vec<usize>,
     /// The comment/title line associated with this frame.
     pub title: String,
+    /// Simulation step associated with this frame, when supplied by a binary
+    /// trajectory format.
+    pub step: usize,
+    /// Simulation time associated with this frame in the source units.
+    pub time: f64,
 }
 
 impl CoordinateFrame {
@@ -48,6 +53,8 @@ impl CoordinateFrame {
             residue_ids: vec![0; count],
             atom_ids: (1..=count).collect(),
             title: String::new(),
+            step: 0,
+            time: 0.0,
         }
     }
 

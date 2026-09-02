@@ -4,10 +4,12 @@
 //! formats ([`pdb`]), atom selection ([`selection`]), and numerical routines
 //! ([`geometry`]).
 
+pub mod amber;
 pub mod analysis;
 pub mod analysis_algorithms;
 pub mod coordinates;
 pub mod core;
+pub mod correlations;
 pub mod dcd;
 pub mod distances;
 pub mod formats;
@@ -16,12 +18,17 @@ pub mod guesser;
 pub mod mdamath;
 pub mod neighbor_search;
 pub mod pdb;
+pub mod pdbqt;
 pub mod psf;
 pub mod selection;
 pub mod topology_groups;
 pub mod transformations;
 pub mod units;
+pub mod xdr;
 
+pub use amber::{
+    AmberError, InpcrdFile, NamdBinFile, read_inpcrd, read_namdbin, write_inpcrd, write_namdbin,
+};
 pub use analysis::{
     Analysis, CenterOfMassAnalysis, MeanSquareDisplacementAnalysis, RmsdAnalysis, RmsfAnalysis,
 };
@@ -29,6 +36,9 @@ pub use analysis_algorithms::{kabsch_fit, kabsch_rmsd, rmsd_array};
 pub use coordinates::{CoordinateError, CoordinateFile, CoordinateFrame};
 pub use coordinates::{read_gro, read_xyz, write_gro, write_xyz};
 pub use core::{Atom, AtomGroup, Bond, Frame, Residue, Segment, Topology, Trajectory, Universe};
+pub use correlations::{
+    AutocorrelationResult, CorrelationError, autocorrelation, correct_intermittency,
+};
 pub use dcd::{DcdEndian, DcdError, DcdFile, DcdHeader, DcdWriteOptions, read_dcd, write_dcd};
 pub use distances::{
     DistanceError, PairDistances, apply_pbc, calc_angle, calc_angles, calc_bond, calc_bonds,
@@ -51,15 +61,22 @@ pub use neighbor_search::{
     SearchLevel,
 };
 pub use pdb::{PdbAtom, PdbBond, PdbCryst1, PdbError, PdbStructure, read_pdb, write_pdb};
+pub use pdbqt::{PdbqtAtom, PdbqtError, PdbqtStructure, read_pdbqt, write_pdbqt};
 pub use psf::{PsfAtom, PsfBond, PsfError, PsfStructure, read_psf, write_psf};
 pub use topology_groups::{AngleValue, BondLength, DihedralValue, TopologyGroupExt};
+pub use xdr::{
+    TrrFile, TrrPrecision, TrrWriteOptions, XdrError, XtcFile, XtcWriteOptions, read_trr, read_xtc,
+    write_trr, write_xtc,
+};
 
 pub type Result<T> = std::result::Result<T, Error>;
 
 #[derive(Debug)]
 pub enum Error {
     Io(std::io::Error),
+    Amber(amber::AmberError),
     Pdb(PdbError),
+    Pdbqt(pdbqt::PdbqtError),
     Psf(PsfError),
     Dcd(dcd::DcdError),
     Coordinate(CoordinateError),
@@ -74,7 +91,9 @@ impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Io(error) => write!(f, "I/O error: {error}"),
+            Self::Amber(error) => write!(f, "Amber/NAMD coordinate error: {error}"),
             Self::Pdb(error) => write!(f, "PDB error: {error}"),
+            Self::Pdbqt(error) => write!(f, "PDBQT error: {error}"),
             Self::Psf(error) => write!(f, "PSF error: {error}"),
             Self::Dcd(error) => write!(f, "DCD error: {error}"),
             Self::Coordinate(error) => write!(f, "coordinate error: {error}"),
@@ -95,9 +114,21 @@ impl From<std::io::Error> for Error {
     }
 }
 
+impl From<amber::AmberError> for Error {
+    fn from(error: amber::AmberError) -> Self {
+        Self::Amber(error)
+    }
+}
+
 impl From<PdbError> for Error {
     fn from(error: PdbError) -> Self {
         Self::Pdb(error)
+    }
+}
+
+impl From<pdbqt::PdbqtError> for Error {
+    fn from(error: pdbqt::PdbqtError) -> Self {
+        Self::Pdbqt(error)
     }
 }
 

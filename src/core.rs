@@ -1,9 +1,11 @@
 //! Core topology and trajectory objects.
 
+use crate::amber::{InpcrdFile, NamdBinFile, read_inpcrd, read_namdbin};
 use crate::coordinates::CoordinateFile;
 use crate::dcd::DcdFile;
 use crate::formats::Structure;
 use crate::pdb::{PdbAtom, PdbBond, PdbStructure, read_pdb};
+use crate::pdbqt::{PdbqtAtom, PdbqtStructure, read_pdbqt};
 use crate::psf::{PsfStructure, read_psf};
 use crate::selection::{AtomLike, SelectionError, select, select_with_bonds};
 use std::path::Path;
@@ -533,6 +535,43 @@ impl Universe {
         Self::from_pdb_structure(PdbStructure::from_str(input)?)
     }
 
+    /// Construct a universe from a single-frame AutoDock PDBQT file.
+    pub fn from_pdbqt(path: impl AsRef<Path>) -> crate::Result<Self> {
+        Self::from_pdbqt_structure(read_pdbqt(path)?)
+    }
+
+    /// Construct a universe directly from an AutoDock PDBQT document held in
+    /// memory.
+    pub fn from_pdbqt_str(input: &str) -> crate::Result<Self> {
+        Self::from_pdbqt_structure(PdbqtStructure::from_str(input)?)
+    }
+
+    fn from_pdbqt_structure(structure: PdbqtStructure) -> crate::Result<Self> {
+        let PdbqtStructure {
+            atoms: pdbqt_atoms,
+            cryst1,
+            ..
+        } = structure;
+        if pdbqt_atoms.is_empty() {
+            return Err(crate::Error::InvalidInput(
+                "PDBQT coordinate file contains no atoms".to_owned(),
+            ));
+        }
+        let atoms = pdbqt_atoms
+            .into_iter()
+            .enumerate()
+            .map(|(index, source)| atom_from_pdbqt(index, source))
+            .collect::<Vec<_>>();
+        let mut universe = Self::from_atoms(atoms);
+        if let Some(cell) = cryst1 {
+            let dimensions = [cell.a, cell.b, cell.c, cell.alpha, cell.beta, cell.gamma];
+            for frame in &mut universe.trajectory.frames {
+                frame.dimensions = Some(dimensions);
+            }
+        }
+        Ok(universe)
+    }
+
     fn from_pdb_structure(structure: PdbStructure) -> crate::Result<Self> {
         let PdbStructure {
             atoms: pdb_atoms,
@@ -735,6 +774,26 @@ impl Universe {
         Self::from_format_structure(Structure::from_crd_str(input)?)
     }
 
+    /// Construct a universe from an Amber restart coordinate file.
+    pub fn from_inpcrd(path: impl AsRef<Path>) -> crate::Result<Self> {
+        Self::from_coordinate_file(read_inpcrd(path)?.coordinates)
+    }
+
+    /// Construct a universe from an Amber restart document held in memory.
+    pub fn from_inpcrd_str(input: &str) -> crate::Result<Self> {
+        Self::from_coordinate_file(InpcrdFile::from_str(input)?.coordinates)
+    }
+
+    /// Construct a universe from a NAMD double-precision binary coordinate file.
+    pub fn from_namdbin(path: impl AsRef<Path>) -> crate::Result<Self> {
+        Self::from_coordinate_file(read_namdbin(path)?.coordinates)
+    }
+
+    /// Construct a universe from NAMD binary coordinate bytes held in memory.
+    pub fn from_namdbin_bytes(bytes: &[u8]) -> crate::Result<Self> {
+        Self::from_coordinate_file(NamdBinFile::from_bytes(bytes)?.coordinates)
+    }
+
     fn from_coordinate_file(file: CoordinateFile) -> crate::Result<Self> {
         let first = file.frames.first().ok_or_else(|| {
             crate::Error::InvalidInput("coordinate file has no frames".to_string())
@@ -769,6 +828,8 @@ impl Universe {
                 let mut result = Frame::new(frame.positions);
                 result.velocities = frame.velocities;
                 result.dimensions = frame.dimensions;
+                result.step = frame.step;
+                result.time = frame.time;
                 result
             })
             .collect();
@@ -1064,6 +1125,76 @@ impl Universe {
         Ok(())
     }
 
+    /// Write the current topology and coordinates as a single-frame PDBQT
+    /// document.
+    pub fn write_pdbqt(&self, path: impl AsRef<Path>) -> crate::Result<()> {
+        let first_positions = self
+            .trajectory
+            .frames
+            .first()
+            .map(|frame| frame.positions.clone())
+            .unwrap_or_else(|| {
+                self.topology
+                    .atoms
+                    .iter()
+                    .map(|atom| atom.position)
+                    .collect()
+            });
+        let atoms = self
+            .topology
+            .atoms
+            .iter()
+            .enumerate()
+            .map(|(index, atom)| {
+                let position = first_positions.get(index).copied().unwrap_or(atom.position);
+                let atom_type = atom
+                    .atom_type
+                    .clone()
+                    .or_else(|| atom.element.clone())
+                    .unwrap_or_default();
+                PdbqtAtom {
+                    serial: u32::try_from(index + 1).unwrap_or(u32::MAX),
+                    name: atom.name.clone(),
+                    alt_loc: None,
+                    residue_name: atom.resname.clone(),
+                    chain_id: atom.chain_id.chars().next(),
+                    residue_sequence: atom.resid,
+                    insertion_code: None,
+                    x: position[0],
+                    y: position[1],
+                    z: position[2],
+                    occupancy: atom.occupancy.unwrap_or(1.0),
+                    temperature_factor: atom.temp_factor.unwrap_or(0.0),
+                    charge: atom.charge,
+                    atom_type,
+                    hetatm: false,
+                }
+            })
+            .collect();
+        let cryst1 = self
+            .trajectory
+            .frames
+            .first()
+            .and_then(|frame| frame.dimensions)
+            .map(|dimensions| crate::pdb::PdbCryst1 {
+                a: dimensions[0],
+                b: dimensions[1],
+                c: dimensions[2],
+                alpha: dimensions[3],
+                beta: dimensions[4],
+                gamma: dimensions[5],
+                space_group: "P 1".to_owned(),
+                z: None,
+            });
+        PdbqtStructure {
+            atoms,
+            cryst1,
+            title: String::new(),
+        }
+        .write_file(path)?;
+        Ok(())
+    }
+
     pub fn atoms(&self) -> AtomGroup {
         let positions = self.positions();
         let mut atoms = self.topology.atoms.clone();
@@ -1178,6 +1309,45 @@ fn infer_element(name: &str) -> Option<String> {
     }
 }
 
+fn atom_from_pdbqt(index: usize, source: PdbqtAtom) -> Atom {
+    let position = source.position();
+    let chain_id = source
+        .chain_id
+        .map_or_else(String::new, |value| value.to_string());
+    let element = infer_element(&source.atom_type).or_else(|| infer_element(&source.name));
+    // PDBQT `atom_type` values are AutoDock types, not necessarily element
+    // symbols (for example, `HD` and `OA`).  MDAnalysis guesses masses from
+    // the raw type string, so only exact element-like types receive a mass.
+    let mass = if source.atom_type.trim().is_empty() {
+        element.as_deref().and_then(element_mass).unwrap_or(0.0)
+    } else {
+        element_mass(&source.atom_type).unwrap_or(0.0)
+    };
+    Atom {
+        index,
+        name: source.name,
+        atom_type: (!source.atom_type.is_empty()).then_some(source.atom_type),
+        element,
+        mass,
+        charge: source.charge,
+        resid: source.residue_sequence,
+        residue_index: 0,
+        resname: source.residue_name,
+        segid: if chain_id.is_empty() {
+            "SYSTEM".to_owned()
+        } else {
+            chain_id.clone()
+        },
+        segment_index: 0,
+        chain_id,
+        position,
+        velocity: None,
+        force: None,
+        temp_factor: Some(source.temperature_factor),
+        occupancy: Some(source.occupancy),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1241,6 +1411,59 @@ mod tests {
         assert_eq!(universe.topology.bonds[0].partner(0), Some(1));
         assert_eq!(universe.topology.bonds[0].order, Some(1));
         assert_eq!(universe.topology.atoms[0].atom_type.as_deref(), Some("O.2"));
+    }
+
+    #[test]
+    fn pdbqt_constructor_preserves_autodock_attributes_and_unit_cell() {
+        let pdbqt = concat!(
+            "CRYST1   10.000   20.000   30.000  90.00  90.00 120.00 P 1          1\n",
+            "ATOM     42  OA  LIG A   7       1.000   2.000   3.000  1.00 10.00    -0.500 OA\n",
+            "END\n",
+        );
+        let universe = Universe::from_pdbqt_str(pdbqt).expect("valid PDBQT");
+        assert_eq!(universe.n_atoms(), 1);
+        assert_eq!(universe.topology.atoms[0].index, 0);
+        assert_eq!(universe.topology.atoms[0].atom_type.as_deref(), Some("OA"));
+        assert_eq!(universe.topology.atoms[0].element.as_deref(), Some("O"));
+        assert_eq!(universe.topology.atoms[0].charge, -0.5);
+        assert_eq!(universe.topology.atoms[0].segid, "A");
+        assert_eq!(
+            universe.trajectory.frames[0].dimensions,
+            Some([10.0, 20.0, 30.0, 90.0, 90.0, 120.0])
+        );
+    }
+
+    #[test]
+    fn pdbqt_writer_round_trips_universe_coordinates_and_charge() {
+        let input = concat!(
+            "ATOM      1  N   ALA A   1       1.000   2.000   3.000  1.00 10.00    -0.300 N\n",
+            "END\n",
+        );
+        let universe = Universe::from_pdbqt_str(input).expect("valid PDBQT");
+        let path = std::env::temp_dir().join(format!(
+            "mdanalysis-rs-pdbqt-{}-{}.pdbqt",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock")
+                .as_nanos()
+        ));
+        universe.write_pdbqt(&path).expect("write PDBQT");
+        let reparsed = Universe::from_pdbqt(&path).expect("read PDBQT");
+        let _ = std::fs::remove_file(path);
+        assert_eq!(reparsed.positions(), universe.positions());
+        assert_eq!(reparsed.topology.atoms[0].charge, -0.3);
+    }
+
+    #[test]
+    fn pdbqt_mass_guessing_uses_autodock_type_tokens() {
+        let path = Path::new("../mdanalysis/testsuite/MDAnalysisTests/data/pdbqt_inputpdbqt.pdbqt");
+        let universe = Universe::from_pdbqt(path).expect("PDBQT fixture should parse");
+        let masses = universe.atoms().masses();
+        assert_eq!(
+            &masses[..7],
+            &[14.007, 0.0, 0.0, 12.011, 12.011, 0.0, 12.011]
+        );
     }
 
     #[test]
@@ -1370,6 +1593,22 @@ mod tests {
                 .add_frame(Frame::new(vec![[0.0, 0.0, 0.0]]))
                 .is_err()
         );
+    }
+
+    #[test]
+    fn amber_and_namdbin_universe_constructors_attach_coordinates() {
+        let inpcrd = "title\n    1  2.5\n   1.0000000   2.0000000   3.0000000\n";
+        let universe = Universe::from_inpcrd_str(inpcrd).unwrap();
+        assert_eq!(universe.n_atoms(), 1);
+        assert_eq!(universe.positions(), vec![[1.0, 2.0, 3.0]]);
+        assert!((universe.current_frame().unwrap().time - 2.5).abs() < 1.0e-12);
+        let namd = crate::amber::NamdBinFile {
+            coordinates: crate::coordinates::CoordinateFile::new(vec![
+                crate::coordinates::CoordinateFrame::new(vec![[4.0, 5.0, 6.0]]),
+            ]),
+        };
+        let universe = Universe::from_namdbin_bytes(&namd.to_bytes().unwrap()).unwrap();
+        assert_eq!(universe.positions(), vec![[4.0, 5.0, 6.0]]);
     }
 
     #[test]
