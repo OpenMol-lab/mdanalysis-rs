@@ -12,6 +12,7 @@ pub mod core;
 pub mod correlations;
 pub mod dcd;
 pub mod distances;
+pub mod fhiaims;
 pub mod formats;
 pub mod geometry;
 pub mod guesser;
@@ -47,6 +48,10 @@ pub use distances::{
     calc_dihedral, calc_dihedrals, capped_distance, distance_array as coordinate_distance_array,
     minimize_vectors, minimum_image_triclinic, self_capped_distance,
     self_distance_array as coordinate_self_distance_array, transform_r_to_s, transform_s_to_r,
+};
+pub use fhiaims::{
+    FhiaimsData, FhiaimsError, FhiaimsFile, FhiaimsStructure, read_fhiaims, write_fhiaims,
+    write_fhiaims_file,
 };
 pub use formats::{
     FormatAtom, FormatBond, FormatError, Structure, read_crd, read_mol2, read_pqr, write_crd,
@@ -94,6 +99,7 @@ pub enum Error {
     Dcd(dcd::DcdError),
     Coordinate(CoordinateError),
     Format(formats::FormatError),
+    Fhiaims(fhiaims::FhiaimsError),
     Distance(DistanceError),
     Guesser(guesser::GuesserError),
     Selection(selection::SelectionError),
@@ -114,6 +120,7 @@ impl std::fmt::Display for Error {
             Self::Dcd(error) => write!(f, "DCD error: {error}"),
             Self::Coordinate(error) => write!(f, "coordinate error: {error}"),
             Self::Format(error) => write!(f, "format error: {error}"),
+            Self::Fhiaims(error) => write!(f, "FHI-AIMS error: {error}"),
             Self::Distance(error) => write!(f, "distance error: {error}"),
             Self::Guesser(error) => write!(f, "guesser error: {error}"),
             Self::Selection(error) => write!(f, "selection error: {error}"),
@@ -187,6 +194,12 @@ impl From<CoordinateError> for Error {
 impl From<formats::FormatError> for Error {
     fn from(error: formats::FormatError) -> Self {
         Self::Format(error)
+    }
+}
+
+impl From<fhiaims::FhiaimsError> for Error {
+    fn from(error: fhiaims::FhiaimsError) -> Self {
+        Self::Fhiaims(error)
     }
 }
 
