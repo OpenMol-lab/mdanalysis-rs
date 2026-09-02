@@ -359,6 +359,7 @@ enum SameProperty {
     Residue,
     Resname,
     Name,
+    Element,
     Type,
     Segid,
     Mass,
@@ -381,6 +382,7 @@ impl SameProperty {
             Self::Residue => atom.resid() == reference.resid() && atom.segid() == reference.segid(),
             Self::Resname => atom.resname() == reference.resname(),
             Self::Name => atom.name() == reference.name(),
+            Self::Element => atom.element() == reference.element(),
             Self::Type => atom.atom_type() == reference.atom_type(),
             Self::Segid => atom.segid() == reference.segid(),
             Self::Mass => match (atom.mass(), reference.mass()) {
@@ -1035,6 +1037,7 @@ impl Parser {
             "residue" => SameProperty::Residue,
             "resname" => SameProperty::Resname,
             "name" => SameProperty::Name,
+            "element" => SameProperty::Element,
             "type" => SameProperty::Type,
             "segid" | "segment" => SameProperty::Segid,
             "mass" => SameProperty::Mass,
@@ -1269,6 +1272,7 @@ mod tests {
         assert_eq!(select(&atoms, "point .5 0 0 .6").unwrap().len(), 2);
         assert_eq!(select(&atoms, "around 1.01 name CA").unwrap().len(), 1);
         assert_eq!(select(&atoms, "same resname as resid 1").unwrap().len(), 2);
+        assert_eq!(select(&atoms, "same element as index 0").unwrap().len(), 1);
         assert_eq!(select(&atoms, "same x as index 0").unwrap().len(), 2);
         assert_eq!(select(&atoms, "global backbone").unwrap().len(), 2);
         assert_eq!(select(&atoms, "byres name CA").unwrap().len(), 2);
