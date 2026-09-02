@@ -65,8 +65,8 @@ pub use pdbqt::{PdbqtAtom, PdbqtError, PdbqtStructure, read_pdbqt, write_pdbqt};
 pub use psf::{PsfAtom, PsfBond, PsfError, PsfStructure, read_psf, write_psf};
 pub use topology_groups::{AngleValue, BondLength, DihedralValue, TopologyGroupExt};
 pub use xdr::{
-    TrrFile, TrrPrecision, TrrWriteOptions, XdrError, XtcFile, XtcWriteOptions, read_trr, read_xtc,
-    write_trr, write_xtc,
+    TrrFile, TrrPrecision, TrrWriteOptions, XdrError, XtcFile, XtcWriteOptions, read_trr,
+    read_xtc, write_trr, write_xtc,
 };
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -75,6 +75,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 pub enum Error {
     Io(std::io::Error),
     Amber(amber::AmberError),
+    Xdr(xdr::XdrError),
     Pdb(PdbError),
     Pdbqt(pdbqt::PdbqtError),
     Psf(PsfError),
@@ -92,6 +93,7 @@ impl std::fmt::Display for Error {
         match self {
             Self::Io(error) => write!(f, "I/O error: {error}"),
             Self::Amber(error) => write!(f, "Amber/NAMD coordinate error: {error}"),
+            Self::Xdr(error) => write!(f, "XDR trajectory error: {error}"),
             Self::Pdb(error) => write!(f, "PDB error: {error}"),
             Self::Pdbqt(error) => write!(f, "PDBQT error: {error}"),
             Self::Psf(error) => write!(f, "PSF error: {error}"),
@@ -117,6 +119,12 @@ impl From<std::io::Error> for Error {
 impl From<amber::AmberError> for Error {
     fn from(error: amber::AmberError) -> Self {
         Self::Amber(error)
+    }
+}
+
+impl From<xdr::XdrError> for Error {
+    fn from(error: xdr::XdrError) -> Self {
+        Self::Xdr(error)
     }
 }
 

@@ -8,6 +8,7 @@ use crate::pdb::{PdbAtom, PdbBond, PdbStructure, read_pdb};
 use crate::pdbqt::{PdbqtAtom, PdbqtStructure, read_pdbqt};
 use crate::psf::{PsfStructure, read_psf};
 use crate::selection::{AtomLike, SelectionError, select, select_with_bonds};
+use crate::xdr::{TrrFile, XtcFile, read_trr, read_xtc};
 use std::path::Path;
 
 /// A single atom and its topology metadata.
@@ -648,6 +649,28 @@ impl Universe {
         Self::from_dcd_file(DcdFile::from_bytes(bytes)?)
     }
 
+    /// Construct a universe from a Gromacs XTC trajectory without a separate
+    /// topology. Atom metadata defaults to the XTC atom count and positions.
+    pub fn from_xtc(path: impl AsRef<Path>) -> crate::Result<Self> {
+        Self::from_xtc_file(read_xtc(path)?)
+    }
+
+    /// Construct a universe from XTC bytes without a separate topology.
+    pub fn from_xtc_bytes(bytes: &[u8]) -> crate::Result<Self> {
+        Self::from_xtc_file(XtcFile::from_bytes(bytes)?)
+    }
+
+    /// Construct a universe from a Gromacs TRR trajectory without a separate
+    /// topology. Atom metadata defaults to the TRR atom count and positions.
+    pub fn from_trr(path: impl AsRef<Path>) -> crate::Result<Self> {
+        Self::from_trr_file(read_trr(path)?)
+    }
+
+    /// Construct a universe from TRR bytes without a separate topology.
+    pub fn from_trr_bytes(bytes: &[u8]) -> crate::Result<Self> {
+        Self::from_trr_file(TrrFile::from_bytes(bytes)?)
+    }
+
     /// Construct a universe from a PSF topology without coordinates.
     ///
     /// A zero-filled frame is provided so that coordinate-consuming methods
@@ -732,6 +755,32 @@ impl Universe {
         Self::from_psf_and_dcd_file(PsfStructure::from_str(psf)?, DcdFile::from_bytes(dcd)?)
     }
 
+    /// Construct a universe from PSF topology and an XTC trajectory file.
+    pub fn from_psf_and_xtc(
+        psf_path: impl AsRef<Path>,
+        xtc_path: impl AsRef<Path>,
+    ) -> crate::Result<Self> {
+        Self::from_psf_and_xtc_file(read_psf(psf_path)?, read_xtc(xtc_path)?)
+    }
+
+    /// Construct a universe from PSF and XTC documents held in memory.
+    pub fn from_psf_and_xtc_bytes(psf: &str, xtc: &[u8]) -> crate::Result<Self> {
+        Self::from_psf_and_xtc_file(PsfStructure::from_str(psf)?, XtcFile::from_bytes(xtc)?)
+    }
+
+    /// Construct a universe from PSF topology and a TRR trajectory file.
+    pub fn from_psf_and_trr(
+        psf_path: impl AsRef<Path>,
+        trr_path: impl AsRef<Path>,
+    ) -> crate::Result<Self> {
+        Self::from_psf_and_trr_file(read_psf(psf_path)?, read_trr(trr_path)?)
+    }
+
+    /// Construct a universe from PSF and TRR documents held in memory.
+    pub fn from_psf_and_trr_bytes(psf: &str, trr: &[u8]) -> crate::Result<Self> {
+        Self::from_psf_and_trr_file(PsfStructure::from_str(psf)?, TrrFile::from_bytes(trr)?)
+    }
+
     /// Construct a universe from PDB topology and a DCD trajectory file.
     pub fn from_pdb_and_dcd(
         pdb_path: impl AsRef<Path>,
@@ -746,6 +795,32 @@ impl Universe {
     /// Construct a universe from PDB topology and DCD bytes held in memory.
     pub fn from_pdb_and_dcd_bytes(pdb: &str, dcd: &[u8]) -> crate::Result<Self> {
         Self::from_pdb_and_dcd_structures(PdbStructure::from_str(pdb)?, DcdFile::from_bytes(dcd)?)
+    }
+
+    /// Construct a universe from PDB topology and an XTC trajectory file.
+    pub fn from_pdb_and_xtc(
+        pdb_path: impl AsRef<Path>,
+        xtc_path: impl AsRef<Path>,
+    ) -> crate::Result<Self> {
+        Self::from_pdb_and_xtc_structures(read_pdb(pdb_path)?, read_xtc(xtc_path)?)
+    }
+
+    /// Construct a universe from PDB and XTC documents held in memory.
+    pub fn from_pdb_and_xtc_bytes(pdb: &str, xtc: &[u8]) -> crate::Result<Self> {
+        Self::from_pdb_and_xtc_structures(PdbStructure::from_str(pdb)?, XtcFile::from_bytes(xtc)?)
+    }
+
+    /// Construct a universe from PDB topology and a TRR trajectory file.
+    pub fn from_pdb_and_trr(
+        pdb_path: impl AsRef<Path>,
+        trr_path: impl AsRef<Path>,
+    ) -> crate::Result<Self> {
+        Self::from_pdb_and_trr_structures(read_pdb(pdb_path)?, read_trr(trr_path)?)
+    }
+
+    /// Construct a universe from PDB and TRR documents held in memory.
+    pub fn from_pdb_and_trr_bytes(pdb: &str, trr: &[u8]) -> crate::Result<Self> {
+        Self::from_pdb_and_trr_structures(PdbStructure::from_str(pdb)?, TrrFile::from_bytes(trr)?)
     }
 
     pub fn from_pqr(path: impl AsRef<Path>) -> crate::Result<Self> {
@@ -871,15 +946,51 @@ impl Universe {
         })
     }
 
+    fn from_xtc_file(file: XtcFile) -> crate::Result<Self> {
+        Self::from_coordinate_file(file.coordinates)
+    }
+
+    fn from_trr_file(file: TrrFile) -> crate::Result<Self> {
+        let mut universe = Self::from_coordinate_file(file.coordinates)?;
+        for (frame, forces) in universe.trajectory.frames.iter_mut().zip(file.forces) {
+            frame.forces = forces;
+        }
+        Ok(universe)
+    }
+
     fn from_psf_and_dcd_file(psf: PsfStructure, dcd: DcdFile) -> crate::Result<Self> {
         let mut universe = Self::from_psf_structure(psf)?;
         universe.attach_dcd(dcd)?;
         Ok(universe)
     }
 
+    fn from_psf_and_xtc_file(psf: PsfStructure, xtc: XtcFile) -> crate::Result<Self> {
+        let mut universe = Self::from_psf_structure(psf)?;
+        universe.attach_coordinate_file(xtc.coordinates)?;
+        Ok(universe)
+    }
+
+    fn from_psf_and_trr_file(psf: PsfStructure, trr: TrrFile) -> crate::Result<Self> {
+        let mut universe = Self::from_psf_structure(psf)?;
+        universe.attach_trr(trr)?;
+        Ok(universe)
+    }
+
     fn from_pdb_and_dcd_structures(pdb: PdbStructure, dcd: DcdFile) -> crate::Result<Self> {
         let mut universe = Self::from_pdb_structure(pdb)?;
         universe.attach_dcd(dcd)?;
+        Ok(universe)
+    }
+
+    fn from_pdb_and_xtc_structures(pdb: PdbStructure, xtc: XtcFile) -> crate::Result<Self> {
+        let mut universe = Self::from_pdb_structure(pdb)?;
+        universe.attach_coordinate_file(xtc.coordinates)?;
+        Ok(universe)
+    }
+
+    fn from_pdb_and_trr_structures(pdb: PdbStructure, trr: TrrFile) -> crate::Result<Self> {
+        let mut universe = Self::from_pdb_structure(pdb)?;
+        universe.attach_trr(trr)?;
         Ok(universe)
     }
 
@@ -912,6 +1023,56 @@ impl Universe {
             })
             .collect();
         self.trajectory = Trajectory::new(frames);
+        Ok(())
+    }
+
+    fn attach_coordinate_file(&mut self, coordinates: CoordinateFile) -> crate::Result<()> {
+        if coordinates.n_atoms() != self.n_atoms() {
+            return Err(crate::Error::InvalidInput(format!(
+                "trajectory contains {} atoms, topology contains {}",
+                coordinates.n_atoms(),
+                self.n_atoms()
+            )));
+        }
+        if coordinates.frames.is_empty() {
+            return Err(crate::Error::InvalidInput(
+                "coordinate file has no frames".to_owned(),
+            ));
+        }
+        let frames = coordinates
+            .frames
+            .into_iter()
+            .map(|coordinate| {
+                let mut frame = Frame::new(coordinate.positions);
+                frame.velocities = coordinate.velocities;
+                frame.dimensions = coordinate.dimensions;
+                frame.step = coordinate.step;
+                frame.time = coordinate.time;
+                frame
+            })
+            .collect();
+        self.trajectory = Trajectory::new(frames);
+        Ok(())
+    }
+
+    fn attach_trr(&mut self, trr: TrrFile) -> crate::Result<()> {
+        if trr.n_atoms != self.n_atoms() {
+            return Err(crate::Error::InvalidInput(format!(
+                "TRR contains {} atoms, topology contains {}",
+                trr.n_atoms,
+                self.n_atoms()
+            )));
+        }
+        if trr.coordinates.frames.is_empty() {
+            return Err(crate::Error::InvalidInput(
+                "TRR coordinate file has no frames".to_owned(),
+            ));
+        }
+        let forces = trr.forces;
+        self.attach_coordinate_file(trr.coordinates)?;
+        for (frame, force) in self.trajectory.frames.iter_mut().zip(forces) {
+            frame.forces = force;
+        }
         Ok(())
     }
 
@@ -1609,6 +1770,75 @@ mod tests {
         };
         let universe = Universe::from_namdbin_bytes(&namd.to_bytes().unwrap()).unwrap();
         assert_eq!(universe.positions(), vec![[4.0, 5.0, 6.0]]);
+    }
+
+    #[test]
+    fn xdr_universe_constructors_attach_metadata_and_trr_vectors() {
+        let mut coordinate =
+            crate::coordinates::CoordinateFrame::new(vec![[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]);
+        coordinate.step = 17;
+        coordinate.time = 2.5;
+        coordinate.dimensions = Some([2.0, 3.0, 4.0, 90.0, 90.0, 90.0]);
+        let coordinate_file = crate::coordinates::CoordinateFile::new(vec![coordinate.clone()]);
+
+        let xtc = coordinate_file.to_xtc_bytes().unwrap();
+        let universe = Universe::from_xtc_bytes(&xtc).unwrap();
+        assert_eq!(universe.n_atoms(), 2);
+        assert_eq!(universe.current_frame().unwrap().step, 17);
+        assert!((universe.current_frame().unwrap().time - 2.5).abs() < 1.0e-6);
+        assert_eq!(
+            universe.current_frame().unwrap().dimensions.unwrap()[..3],
+            [2.0, 3.0, 4.0]
+        );
+
+        let mut trr_coordinate = coordinate;
+        trr_coordinate.velocities = Some(vec![[0.1, 0.2, 0.3], [0.4, 0.5, 0.6]]);
+        let trr = crate::xdr::TrrFile {
+            n_atoms: 2,
+            coordinates: crate::coordinates::CoordinateFile::new(vec![trr_coordinate]),
+            steps: vec![17],
+            times: vec![2.5],
+            forces: vec![Some(vec![[1.0, 1.1, 1.2], [1.3, 1.4, 1.5]])],
+            lambdas: vec![0.0],
+            double_precision: vec![false],
+        };
+        let trr_bytes = trr
+            .to_bytes(crate::xdr::TrrWriteOptions::default())
+            .unwrap();
+        let universe = Universe::from_trr_bytes(&trr_bytes).unwrap();
+        let frame = universe.current_frame().unwrap();
+        assert_eq!(frame.velocities.as_ref().unwrap().len(), 2);
+        let force = frame.forces.as_ref().unwrap()[1];
+        assert!((force[0] - 1.3).abs() < 1.0e-6);
+        assert!((force[1] - 1.4).abs() < 1.0e-6);
+        assert!((force[2] - 1.5).abs() < 1.0e-6);
+    }
+
+    #[test]
+    fn psf_xdr_constructors_validate_topology_atom_count() {
+        let psf = concat!(
+            "PSF\n\n",
+            "       2 !NATOM\n",
+            "       1 SEG      1 ALA      N        NH1          0.000000      14.007000        0\n",
+            "       2 SEG      1 ALA      CA       CT1          0.000000      12.011000        0\n",
+        );
+        let coordinate = crate::coordinates::CoordinateFile::new(vec![
+            crate::coordinates::CoordinateFrame::new(vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]]),
+        ]);
+        let xtc = coordinate.to_xtc_bytes().unwrap();
+        let universe = Universe::from_psf_and_xtc_bytes(psf, &xtc).unwrap();
+        assert_eq!(universe.n_atoms(), 2);
+        assert_eq!(universe.positions()[1], [1.0, 0.0, 0.0]);
+
+        let one_atom = crate::coordinates::CoordinateFile::new(vec![
+            crate::coordinates::CoordinateFrame::new(vec![[0.0, 0.0, 0.0]]),
+        ])
+        .to_xtc_bytes()
+        .unwrap();
+        let error = Universe::from_psf_and_xtc_bytes(psf, &one_atom).unwrap_err();
+        assert!(
+            matches!(error, crate::Error::InvalidInput(message) if message.contains("trajectory contains 1 atoms"))
+        );
     }
 
     #[test]
