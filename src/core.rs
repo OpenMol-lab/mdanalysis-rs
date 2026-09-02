@@ -432,6 +432,15 @@ impl Universe {
 
     pub fn from_pdb(path: impl AsRef<Path>) -> crate::Result<Self> {
         let structure = read_pdb(path)?;
+        Self::from_pdb_structure(structure)
+    }
+
+    /// Construct a universe directly from a PDB document held in memory.
+    pub fn from_pdb_str(input: &str) -> crate::Result<Self> {
+        Self::from_pdb_structure(PdbStructure::from_str(input)?)
+    }
+
+    fn from_pdb_structure(structure: PdbStructure) -> crate::Result<Self> {
         let atoms: Vec<Atom> = structure.atoms.into_iter().map(Atom::from).collect();
         let mut universe = Self::from_atoms(atoms);
         if structure.frames.len() > 1 {
@@ -452,10 +461,20 @@ impl Universe {
         Self::from_coordinate_file(CoordinateFile::read_xyz(std::fs::File::open(path)?)?)
     }
 
+    /// Construct a universe directly from an XYZ document held in memory.
+    pub fn from_xyz_str(input: &str) -> crate::Result<Self> {
+        Self::from_coordinate_file(CoordinateFile::from_xyz_str(input)?)
+    }
+
     /// Construct a universe from a Gromacs GRO file. Coordinates retain the
     /// nanometre units used by GRO; callers can convert with [`crate::units`].
     pub fn from_gro(path: impl AsRef<Path>) -> crate::Result<Self> {
         Self::from_coordinate_file(CoordinateFile::read_gro(std::fs::File::open(path)?)?)
+    }
+
+    /// Construct a universe directly from a GRO document held in memory.
+    pub fn from_gro_str(input: &str) -> crate::Result<Self> {
+        Self::from_coordinate_file(CoordinateFile::from_gro_str(input)?)
     }
 
     fn from_coordinate_file(file: CoordinateFile) -> crate::Result<Self> {
