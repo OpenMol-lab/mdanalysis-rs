@@ -27,10 +27,16 @@ pub use distances::{
     calc_dihedrals, capped_distance, distance_array as coordinate_distance_array,
     self_capped_distance, self_distance_array as coordinate_self_distance_array,
 };
-pub use formats::{FormatAtom, FormatBond, FormatError, Structure};
-pub use geometry::{Matrix3, Vec3, center_of_mass, distance, distance_array, rmsd};
+pub use formats::{
+    FormatAtom, FormatBond, FormatError, Structure, read_crd, read_mol2, read_pqr, write_mol2,
+    write_pqr,
+};
+pub use geometry::{
+    Matrix3, Vec3, center_of_geometry, center_of_mass, distance, distance_array, rmsd,
+    self_distance_array, weighted_rmsd,
+};
 pub use mdamath::{angle, box_volume, dihedral, norm, triclinic_box, triclinic_vectors};
-pub use pdb::{PdbAtom, PdbError, PdbStructure, read_pdb, write_pdb};
+pub use pdb::{PdbAtom, PdbCryst1, PdbError, PdbStructure, read_pdb, write_pdb};
 pub use topology_groups::{AngleValue, BondLength, DihedralValue, TopologyGroupExt};
 
 pub type Result<T> = std::result::Result<T, Error>;

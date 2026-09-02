@@ -116,9 +116,12 @@ pub fn radius_cut_q(distances: &[f64], reference: &[f64], radius: f64) -> Option
 
 /// Radius of gyration around the (mass-weighted when available) centre.
 pub fn radius_of_gyration(group: &AtomGroup) -> Option<f64> {
-    let center = group.center_of_mass()?;
+    if group.is_empty() {
+        return None;
+    }
     let total_mass = group.total_mass();
     if total_mass > 0.0 {
+        let center = group.center_of_mass()?;
         let weighted = group
             .atoms
             .iter()
@@ -126,6 +129,16 @@ pub fn radius_of_gyration(group: &AtomGroup) -> Option<f64> {
             .sum::<f64>();
         Some((weighted / total_mass).sqrt())
     } else {
+        let center = {
+            let mut center = [0.0; 3];
+            for atom in &group.atoms {
+                center[0] += atom.position[0];
+                center[1] += atom.position[1];
+                center[2] += atom.position[2];
+            }
+            let count = group.len() as f64;
+            [center[0] / count, center[1] / count, center[2] / count]
+        };
         let mean = group
             .atoms
             .iter()
@@ -255,6 +268,15 @@ mod tests {
         assert_eq!(values, vec![1.0]);
         assert_eq!(hard_cut_q(&[1.0, 3.0], 2.0), Some(0.5));
         assert_eq!(radius_cut_q(&[1.0, 3.0], &[1.2, 4.0], 0.3), Some(0.5));
+    }
+
+    #[test]
+    fn radius_of_gyration_falls_back_to_geometry_without_masses() {
+        let group = AtomGroup::new(vec![
+            Atom::new(0, "X", [0.0, 0.0, 0.0]),
+            Atom::new(1, "X", [2.0, 0.0, 0.0]),
+        ]);
+        assert_eq!(radius_of_gyration(&group), Some(1.0));
     }
 
     #[test]

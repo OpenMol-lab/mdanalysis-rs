@@ -357,6 +357,15 @@ impl<'a> IntoIterator for &'a Trajectory {
     }
 }
 
+impl IntoIterator for Trajectory {
+    type Item = Frame;
+    type IntoIter = std::vec::IntoIter<Frame>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.frames.into_iter()
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct AtomGroup {
     pub atoms: Vec<Atom>,
@@ -393,6 +402,40 @@ impl AtomGroup {
         self.atoms.iter().map(|atom| atom.mass).sum()
     }
 
+    pub fn center_of_geometry(&self) -> Option<[f64; 3]> {
+        if self.atoms.is_empty() {
+            return None;
+        }
+        let positions: Vec<crate::geometry::Vec3> =
+            self.positions().into_iter().map(Into::into).collect();
+        Some(crate::geometry::center_of_geometry(&positions).to_array())
+    }
+
+    pub fn radius_of_gyration(&self) -> Option<f64> {
+        crate::analysis::radius_of_gyration(self)
+    }
+
+    pub fn translate_in_place(&mut self, offset: [f64; 3]) {
+        for atom in &mut self.atoms {
+            atom.position[0] += offset[0];
+            atom.position[1] += offset[1];
+            atom.position[2] += offset[2];
+        }
+    }
+
+    pub fn bounding_box(&self) -> Option<([f64; 3], [f64; 3])> {
+        let first = self.atoms.first()?.position;
+        let mut minimum = first;
+        let mut maximum = first;
+        for atom in &self.atoms[1..] {
+            for axis in 0..3 {
+                minimum[axis] = minimum[axis].min(atom.position[axis]);
+                maximum[axis] = maximum[axis].max(atom.position[axis]);
+            }
+        }
+        Some((minimum, maximum))
+    }
+
     pub fn select_atoms(&self, expression: &str) -> Result<Self, SelectionError> {
         Ok(Self::new(
             select(&self.atoms, expression)?
@@ -406,8 +449,29 @@ impl AtomGroup {
         self.atoms.get(index)
     }
 
+    pub fn iter(&self) -> std::slice::Iter<'_, Atom> {
+        self.atoms.iter()
+    }
+
     pub fn slice(&self, range: std::ops::Range<usize>) -> Self {
         Self::new(self.atoms[range].to_vec())
+    }
+}
+
+impl std::ops::Index<usize> for AtomGroup {
+    type Output = Atom;
+
+    fn index(&self, index: usize) -> &Self::Output {
+        &self.atoms[index]
+    }
+}
+
+impl<'a> IntoIterator for &'a AtomGroup {
+    type Item = &'a Atom;
+    type IntoIter = std::slice::Iter<'a, Atom>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.atoms.iter()
     }
 }
 
@@ -625,10 +689,31 @@ impl Universe {
         self.topology.segments.len()
     }
 
+    pub fn n_frames(&self) -> usize {
+        self.trajectory.n_frames()
+    }
+
+    pub fn current_frame(&self) -> Option<&Frame> {
+        if self.trajectory.current == 0 {
+            self.trajectory.frames.first()
+        } else {
+            self.trajectory.frames.get(self.trajectory.current - 1)
+        }
+    }
+
+    pub fn set_frame(&mut self, index: usize) -> crate::Result<()> {
+        if index >= self.trajectory.frames.len() {
+            return Err(crate::Error::InvalidInput(format!(
+                "frame index {index} is out of bounds for {} frames",
+                self.trajectory.frames.len()
+            )));
+        }
+        self.trajectory.current = index + 1;
+        Ok(())
+    }
+
     pub fn positions(&self) -> Vec<[f64; 3]> {
-        self.trajectory
-            .frame(self.trajectory.current.saturating_sub(1))
-            .or_else(|| self.trajectory.frames.first())
+        self.current_frame()
             .map(|frame| frame.positions.clone())
             .unwrap_or_default()
     }
