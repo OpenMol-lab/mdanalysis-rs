@@ -329,6 +329,11 @@ impl CoordinateFile {
         xtc_from_coordinates(self)?.write(writer, XtcWriteOptions::default())
     }
 
+    /// Serialize this coordinate file as XTC bytes.
+    pub fn to_xtc_bytes(&self) -> Result<Vec<u8>, XdrError> {
+        xtc_from_coordinates(self)?.to_bytes(XtcWriteOptions::default())
+    }
+
     /// Parse a TRR trajectory from a reader.
     pub fn read_trr<R: Read>(reader: R) -> Result<Self, XdrError> {
         Ok(TrrFile::read(reader)?.coordinates)
@@ -342,6 +347,11 @@ impl CoordinateFile {
     /// Write this coordinate file in TRR format.
     pub fn write_trr<W: Write>(&self, writer: W) -> Result<(), XdrError> {
         trr_from_coordinates(self)?.write(writer, TrrWriteOptions::default())
+    }
+
+    /// Serialize this coordinate file as TRR bytes.
+    pub fn to_trr_bytes(&self) -> Result<Vec<u8>, XdrError> {
+        trr_from_coordinates(self)?.to_bytes(TrrWriteOptions::default())
     }
 }
 
@@ -987,10 +997,12 @@ fn coord_diff(a: [i32; 3], b: [i32; 3]) -> i64 {
 }
 
 fn sizeofint(size: u64) -> u32 {
-    if size <= 1 {
+    if size == 0 {
         0
     } else {
-        64 - (size - 1).leading_zeros()
+        // Match the reference xdrfile loop: a power-of-two range retains
+        // one extra bit (for example, size 8 uses 4 bits).
+        64 - size.leading_zeros()
     }
 }
 
@@ -998,10 +1010,10 @@ fn sizeofints(sizes: [u64; 3]) -> u32 {
     let product = u128::from(sizes[0])
         .saturating_mul(u128::from(sizes[1]))
         .saturating_mul(u128::from(sizes[2]));
-    if product <= 1 {
+    if product == 0 {
         0
     } else {
-        128 - (product - 1).leading_zeros()
+        128 - product.leading_zeros()
     }
 }
 
