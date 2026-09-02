@@ -14,6 +14,7 @@ pub mod formats;
 pub mod geometry;
 pub mod guesser;
 pub mod mdamath;
+pub mod neighbor_search;
 pub mod pdb;
 pub mod psf;
 pub mod selection;
@@ -45,6 +46,10 @@ pub use geometry::{
 };
 pub use guesser::{Guesser, GuesserError, guess_bonds, guess_element, guess_mass};
 pub use mdamath::{angle, box_volume, dihedral, norm, triclinic_box, triclinic_vectors};
+pub use neighbor_search::{
+    AtomNeighborSearch, NeighborPairs, NeighborSearch, NeighborSearchError, PeriodicKDTree,
+    SearchLevel,
+};
 pub use pdb::{PdbAtom, PdbBond, PdbCryst1, PdbError, PdbStructure, read_pdb, write_pdb};
 pub use psf::{PsfAtom, PsfBond, PsfError, PsfStructure, read_psf, write_psf};
 pub use topology_groups::{AngleValue, BondLength, DihedralValue, TopologyGroupExt};
