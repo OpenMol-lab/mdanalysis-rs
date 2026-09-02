@@ -40,12 +40,18 @@ pub trait TopologyGroupExt {
 
     /// Return selected atom metadata in collection order.
     fn atom_names(&self) -> Vec<String>;
+    fn atom_types(&self) -> Vec<Option<String>>;
     fn residue_ids(&self) -> Vec<i32>;
     fn residue_names(&self) -> Vec<String>;
     fn segment_ids(&self) -> Vec<String>;
+    fn chain_ids(&self) -> Vec<String>;
     fn elements(&self) -> Vec<Option<String>>;
     fn masses_array(&self) -> Vec<f64>;
     fn charges_array(&self) -> Vec<f64>;
+    fn velocities(&self) -> Vec<Option<[f64; 3]>>;
+    fn forces(&self) -> Vec<Option<[f64; 3]>>;
+    fn temperature_factors(&self) -> Vec<Option<f64>>;
+    fn occupancies(&self) -> Vec<Option<f64>>;
     fn residue_indices(&self) -> Vec<usize>;
     fn segment_indices(&self) -> Vec<usize>;
 
@@ -84,6 +90,11 @@ pub trait TopologyGroupExt {
     /// connectivity (an individual atom or an [`AtomGroup`]) contain empty
     /// neighbor lists.
     fn adjacency_list(&self) -> Vec<Vec<usize>>;
+
+    /// Alias for [`Self::adjacency_list`].
+    fn neighbors(&self) -> Vec<Vec<usize>> {
+        self.adjacency_list()
+    }
 
     /// Compute the length of each bond in topology order.
     fn bond_lengths(&self) -> Vec<BondLength>;
@@ -214,8 +225,16 @@ impl TopologyGroupExt for Atom {
         vec![self.resname.clone()]
     }
 
+    fn atom_types(&self) -> Vec<Option<String>> {
+        vec![self.atom_type.clone()]
+    }
+
     fn segment_ids(&self) -> Vec<String> {
         vec![self.segid.clone()]
+    }
+
+    fn chain_ids(&self) -> Vec<String> {
+        vec![self.chain_id.clone()]
     }
 
     fn elements(&self) -> Vec<Option<String>> {
@@ -228,6 +247,22 @@ impl TopologyGroupExt for Atom {
 
     fn charges_array(&self) -> Vec<f64> {
         vec![self.charge]
+    }
+
+    fn velocities(&self) -> Vec<Option<[f64; 3]>> {
+        vec![self.velocity]
+    }
+
+    fn forces(&self) -> Vec<Option<[f64; 3]>> {
+        vec![self.force]
+    }
+
+    fn temperature_factors(&self) -> Vec<Option<f64>> {
+        vec![self.temp_factor]
+    }
+
+    fn occupancies(&self) -> Vec<Option<f64>> {
+        vec![self.occupancy]
     }
 
     fn residue_indices(&self) -> Vec<usize> {
@@ -294,6 +329,13 @@ impl TopologyGroupExt for AtomGroup {
         self.atoms.iter().map(|atom| atom.name.clone()).collect()
     }
 
+    fn atom_types(&self) -> Vec<Option<String>> {
+        self.atoms
+            .iter()
+            .map(|atom| atom.atom_type.clone())
+            .collect()
+    }
+
     fn residue_ids(&self) -> Vec<i32> {
         self.atoms.iter().map(|atom| atom.resid).collect()
     }
@@ -306,6 +348,13 @@ impl TopologyGroupExt for AtomGroup {
         self.atoms.iter().map(|atom| atom.segid.clone()).collect()
     }
 
+    fn chain_ids(&self) -> Vec<String> {
+        self.atoms
+            .iter()
+            .map(|atom| atom.chain_id.clone())
+            .collect()
+    }
+
     fn elements(&self) -> Vec<Option<String>> {
         self.atoms.iter().map(|atom| atom.element.clone()).collect()
     }
@@ -316,6 +365,22 @@ impl TopologyGroupExt for AtomGroup {
 
     fn charges_array(&self) -> Vec<f64> {
         self.atoms.iter().map(|atom| atom.charge).collect()
+    }
+
+    fn velocities(&self) -> Vec<Option<[f64; 3]>> {
+        self.atoms.iter().map(|atom| atom.velocity).collect()
+    }
+
+    fn forces(&self) -> Vec<Option<[f64; 3]>> {
+        self.atoms.iter().map(|atom| atom.force).collect()
+    }
+
+    fn temperature_factors(&self) -> Vec<Option<f64>> {
+        self.atoms.iter().map(|atom| atom.temp_factor).collect()
+    }
+
+    fn occupancies(&self) -> Vec<Option<f64>> {
+        self.atoms.iter().map(|atom| atom.occupancy).collect()
     }
 
     fn residue_indices(&self) -> Vec<usize> {
@@ -382,6 +447,13 @@ impl TopologyGroupExt for Topology {
         self.atoms.iter().map(|atom| atom.name.clone()).collect()
     }
 
+    fn atom_types(&self) -> Vec<Option<String>> {
+        self.atoms
+            .iter()
+            .map(|atom| atom.atom_type.clone())
+            .collect()
+    }
+
     fn residue_ids(&self) -> Vec<i32> {
         self.atoms.iter().map(|atom| atom.resid).collect()
     }
@@ -394,6 +466,13 @@ impl TopologyGroupExt for Topology {
         self.atoms.iter().map(|atom| atom.segid.clone()).collect()
     }
 
+    fn chain_ids(&self) -> Vec<String> {
+        self.atoms
+            .iter()
+            .map(|atom| atom.chain_id.clone())
+            .collect()
+    }
+
     fn elements(&self) -> Vec<Option<String>> {
         self.atoms.iter().map(|atom| atom.element.clone()).collect()
     }
@@ -404,6 +483,22 @@ impl TopologyGroupExt for Topology {
 
     fn charges_array(&self) -> Vec<f64> {
         self.atoms.iter().map(|atom| atom.charge).collect()
+    }
+
+    fn velocities(&self) -> Vec<Option<[f64; 3]>> {
+        self.atoms.iter().map(|atom| atom.velocity).collect()
+    }
+
+    fn forces(&self) -> Vec<Option<[f64; 3]>> {
+        self.atoms.iter().map(|atom| atom.force).collect()
+    }
+
+    fn temperature_factors(&self) -> Vec<Option<f64>> {
+        self.atoms.iter().map(|atom| atom.temp_factor).collect()
+    }
+
+    fn occupancies(&self) -> Vec<Option<f64>> {
+        self.atoms.iter().map(|atom| atom.occupancy).collect()
     }
 
     fn residue_indices(&self) -> Vec<usize> {
