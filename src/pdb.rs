@@ -358,7 +358,8 @@ fn parse_atom(line: &str, line_number: usize, hetatm: bool) -> Result<PdbAtom, P
         });
     }
     let residue_name = field(line, 17, 20).trim().to_string();
-    let residue_sequence = parse_required::<i32>(line, 22, 26, line_number, "residue sequence")?;
+    let residue_sequence =
+        parse_optional::<i32>(line, 22, 26, line_number, "residue sequence")?.unwrap_or(1);
     let x = parse_required::<f64>(line, 30, 38, line_number, "x coordinate")?;
     let y = parse_required::<f64>(line, 38, 46, line_number, "y coordinate")?;
     let z = parse_required::<f64>(line, 46, 54, line_number, "z coordinate")?;
@@ -695,6 +696,18 @@ mod tests {
             PdbStructure::from_str(&compact).unwrap().bonds,
             vec![PdbBond::new(1, 2)]
         );
+    }
+
+    #[test]
+    fn defaults_blank_residue_sequence_to_one() {
+        let input = concat!(
+            "ATOM      1  H2  TIP3           10.000  44.891  14.267  1.00  0.00      TIP3\n",
+            "ATOM      2  OH2 TIP3           67.275  48.893  23.568  1.00  0.00      TIP3\n",
+            "END\n",
+        );
+        let structure = PdbStructure::from_str(input).expect("blank resid is valid");
+        assert_eq!(structure.atoms.len(), 2);
+        assert!(structure.atoms.iter().all(|atom| atom.resid() == 1));
     }
 
     #[test]

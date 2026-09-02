@@ -404,7 +404,13 @@ fn protein_resnames() -> &'static [&'static str] {
     &[
         "ALA", "ARG", "ASN", "ASP", "CYS", "GLN", "GLU", "GLY", "HIS", "HSD", "HSE", "HSP", "ILE",
         "LEU", "LYS", "MET", "PHE", "PRO", "SER", "THR", "TRP", "TYR", "VAL", "MSE", "CYS2",
-        "CYSH", "HID", "HIE", "HIP", "ASH", "GLH", "ACE", "NME",
+        "CYSH", "HID", "HIE", "HIP", "ASH", "GLH", "ACE", "NME", "ARGN", "ASPH", "QLN", "PGLU",
+        "GLUH", "HIS1", "HISD", "HISE", "HISH", "LYSH", "ASN1", "CYS1", "HISA", "HISB", "HIS2",
+        "ORN", "DAB", "LYN", "HYP", "CYM", "CYX", "NALA", "NGLY", "NSER", "NTHR", "NLEU", "NILE",
+        "NVAL", "NASN", "NGLN", "NARG", "NHID", "NHIE", "NHIP", "NTRP", "NPHE", "NTYR", "NGLU",
+        "NASP", "NLYS", "NPRO", "NCYS", "NCYX", "NMET", "CALA", "CGLY", "CSER", "CTHR", "CLEU",
+        "CILE", "CVAL", "CASF", "CASN", "CGLN", "CARG", "CHID", "CHIE", "CHIP", "CTRP", "CPHE",
+        "CTYR", "CGLU", "CASP", "CLYS", "CPRO", "CCYS", "CCYX", "CMET", "CME", "ASF",
     ]
 }
 
