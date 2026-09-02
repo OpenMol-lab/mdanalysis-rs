@@ -1,6 +1,7 @@
 //! Core topology and trajectory objects.
 
 use crate::coordinates::CoordinateFile;
+use crate::dcd::DcdFile;
 use crate::formats::Structure;
 use crate::pdb::{PdbAtom, PdbBond, PdbStructure, read_pdb};
 use crate::psf::{PsfStructure, read_psf};
@@ -597,6 +598,85 @@ impl Universe {
         Self::from_coordinate_file(CoordinateFile::from_gro_str(input)?)
     }
 
+    /// Construct a universe from a DCD trajectory without a separate
+    /// topology. Atom metadata defaults to the DCD atom count and positions.
+    pub fn from_dcd(path: impl AsRef<Path>) -> crate::Result<Self> {
+        Self::from_dcd_file(DcdFile::read(std::fs::File::open(path)?)?)
+    }
+
+    /// Construct a universe from DCD bytes without a separate topology.
+    pub fn from_dcd_bytes(bytes: &[u8]) -> crate::Result<Self> {
+        Self::from_dcd_file(DcdFile::from_bytes(bytes)?)
+    }
+
+    /// Construct a universe from a PSF topology without coordinates.
+    ///
+    /// A zero-filled frame is provided so that coordinate-consuming methods
+    /// remain available; use one of the `from_psf_and_*` constructors to
+    /// attach an actual trajectory.
+    pub fn from_psf(path: impl AsRef<Path>) -> crate::Result<Self> {
+        Self::from_psf_structure(read_psf(path)?)
+    }
+
+    /// Construct a universe from a PSF topology held in memory.
+    pub fn from_psf_str(input: &str) -> crate::Result<Self> {
+        Self::from_psf_structure(PsfStructure::from_str(input)?)
+    }
+
+    /// Construct a universe from PSF topology and a PDB coordinate file.
+    pub fn from_psf_and_pdb(
+        psf_path: impl AsRef<Path>,
+        pdb_path: impl AsRef<Path>,
+    ) -> crate::Result<Self> {
+        Self::from_psf_and_pdb_structures(read_psf(psf_path)?, read_pdb(pdb_path)?)
+    }
+
+    /// Construct a universe from PSF and PDB documents held in memory.
+    pub fn from_psf_and_pdb_str(psf: &str, pdb: &str) -> crate::Result<Self> {
+        Self::from_psf_and_pdb_structures(
+            PsfStructure::from_str(psf)?,
+            PdbStructure::from_str(pdb)?,
+        )
+    }
+
+    /// Construct a universe from PSF topology and an XYZ trajectory file.
+    pub fn from_psf_and_xyz(
+        psf_path: impl AsRef<Path>,
+        xyz_path: impl AsRef<Path>,
+    ) -> crate::Result<Self> {
+        Self::from_psf_and_coordinate_file(
+            read_psf(psf_path)?,
+            CoordinateFile::read_xyz(std::fs::File::open(xyz_path)?)?,
+        )
+    }
+
+    /// Construct a universe from PSF and XYZ documents held in memory.
+    pub fn from_psf_and_xyz_str(psf: &str, xyz: &str) -> crate::Result<Self> {
+        Self::from_psf_and_coordinate_file(
+            PsfStructure::from_str(psf)?,
+            CoordinateFile::from_xyz_str(xyz)?,
+        )
+    }
+
+    /// Construct a universe from PSF topology and a GRO trajectory file.
+    pub fn from_psf_and_gro(
+        psf_path: impl AsRef<Path>,
+        gro_path: impl AsRef<Path>,
+    ) -> crate::Result<Self> {
+        Self::from_psf_and_coordinate_file(
+            read_psf(psf_path)?,
+            CoordinateFile::read_gro(std::fs::File::open(gro_path)?)?,
+        )
+    }
+
+    /// Construct a universe from PSF and GRO documents held in memory.
+    pub fn from_psf_and_gro_str(psf: &str, gro: &str) -> crate::Result<Self> {
+        Self::from_psf_and_coordinate_file(
+            PsfStructure::from_str(psf)?,
+            CoordinateFile::from_gro_str(gro)?,
+        )
+    }
+
     pub fn from_pqr(path: impl AsRef<Path>) -> crate::Result<Self> {
         Self::from_format_structure(crate::formats::read_pqr(path)?)
     }
@@ -648,6 +728,38 @@ impl Universe {
                 result.velocities = frame.velocities;
                 result.dimensions = frame.dimensions;
                 result
+            })
+            .collect();
+        Ok(Self {
+            topology,
+            trajectory: Trajectory::new(frames),
+        })
+    }
+
+    fn from_dcd_file(file: DcdFile) -> crate::Result<Self> {
+        let first = file.coordinates.frames.first().ok_or_else(|| {
+            crate::Error::InvalidInput("DCD file has no coordinate frames".to_owned())
+        })?;
+        let atoms = first
+            .positions
+            .iter()
+            .enumerate()
+            .map(|(index, position)| Atom::new(index, "X", *position))
+            .collect::<Vec<_>>();
+        let topology = Topology::new(atoms);
+        let frames = file
+            .coordinates
+            .frames
+            .into_iter()
+            .enumerate()
+            .map(|(index, coordinate)| {
+                let mut frame = Frame::new(coordinate.positions);
+                frame.dimensions = coordinate.dimensions;
+                let step =
+                    i64::from(file.header.istart) + i64::from(file.header.nsavc) * index as i64;
+                frame.step = usize::try_from(step).unwrap_or(0);
+                frame.time = file.header.delta * step as f64;
+                frame
             })
             .collect();
         Ok(Self {
