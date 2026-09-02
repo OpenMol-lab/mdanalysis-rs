@@ -21,6 +21,26 @@ pub trait AtomLike {
     fn chain_id(&self) -> &str;
     /// Segment identifier.
     fn segid(&self) -> &str;
+
+    /// Force-field atom type, when available.
+    fn atom_type(&self) -> Option<&str> {
+        None
+    }
+
+    /// Cartesian coordinates used by spatial selectors.
+    fn position(&self) -> [f64; 3] {
+        [0.0; 3]
+    }
+
+    /// Atomic mass, when available.
+    fn mass(&self) -> Option<f64> {
+        None
+    }
+
+    /// Partial charge, when available.
+    fn charge(&self) -> Option<f64> {
+        None
+    }
 }
 
 /// Errors produced while lexing or parsing a selection expression.
@@ -98,12 +118,15 @@ impl Selection {
 
     /// Test one atom against this selection.
     pub fn matches<A: AtomLike>(&self, atom: &A) -> bool {
-        self.expression.matches(atom)
+        self.expression.matches(atom, std::slice::from_ref(atom))
     }
 
     /// Apply this selection to a slice, preserving the input order.
     pub fn apply<'a, A: AtomLike>(&self, atoms: &'a [A]) -> Vec<&'a A> {
-        atoms.iter().filter(|atom| self.matches(*atom)).collect()
+        atoms
+            .iter()
+            .filter(|atom| self.expression.matches(*atom, atoms))
+            .collect()
     }
 
     /// Alias for [`Selection::apply`].
@@ -125,81 +148,329 @@ enum Expr {
     All,
     None,
     Predicate(Predicate),
+    Protein,
+    Backbone,
+    Around {
+        cutoff: FloatValue,
+        selection: Box<Self>,
+    },
+    Point {
+        point: [FloatValue; 3],
+        cutoff: FloatValue,
+    },
+    Same {
+        property: SameProperty,
+        selection: Box<Self>,
+    },
+    Atom {
+        segid: String,
+        resid: i64,
+        name: String,
+    },
+    ByRes(Box<Self>),
+    Global(Box<Self>),
     And(Box<Self>, Box<Self>),
     Or(Box<Self>, Box<Self>),
     Not(Box<Self>),
 }
 
 impl Expr {
-    fn matches<A: AtomLike>(&self, atom: &A) -> bool {
+    fn matches<A: AtomLike>(&self, atom: &A, atoms: &[A]) -> bool {
         match self {
             Self::All => true,
             Self::None => false,
             Self::Predicate(predicate) => predicate.matches(atom),
-            Self::And(left, right) => left.matches(atom) && right.matches(atom),
-            Self::Or(left, right) => left.matches(atom) || right.matches(atom),
-            Self::Not(expression) => !expression.matches(atom),
+            Self::Protein => protein_resnames()
+                .iter()
+                .any(|name| atom.resname() == *name),
+            Self::Backbone => {
+                protein_resnames()
+                    .iter()
+                    .any(|name| atom.resname() == *name)
+                    && matches!(atom.name(), "N" | "CA" | "C" | "O")
+            }
+            Self::Around { cutoff, selection } => {
+                if selection.matches(atom, atoms) {
+                    return false;
+                }
+                let cutoff = cutoff.0;
+                let cutoff_squared = cutoff * cutoff;
+                atoms.iter().any(|reference| {
+                    selection.matches(reference, atoms)
+                        && squared_distance(atom.position(), reference.position()) < cutoff_squared
+                })
+            }
+            Self::Point { point, cutoff } => {
+                let point = [point[0].0, point[1].0, point[2].0];
+                squared_distance(atom.position(), point) < cutoff.0 * cutoff.0
+            }
+            Self::Same {
+                property,
+                selection,
+            } => atoms.iter().any(|reference| {
+                selection.matches(reference, atoms) && property.matches(atom, reference)
+            }),
+            Self::Atom { segid, resid, name } => {
+                atom.segid() == segid && i64::from(atom.resid()) == *resid && atom.name() == name
+            }
+            Self::ByRes(selection) => atoms.iter().any(|reference| {
+                selection.matches(reference, atoms)
+                    && reference.resid() == atom.resid()
+                    && reference.segid() == atom.segid()
+            }),
+            Self::Global(selection) => selection.matches(atom, atoms),
+            Self::And(left, right) => left.matches(atom, atoms) && right.matches(atom, atoms),
+            Self::Or(left, right) => left.matches(atom, atoms) || right.matches(atom, atoms),
+            Self::Not(expression) => !expression.matches(atom, atoms),
         }
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Predicate {
-    Name(String),
-    Resname(String),
-    Resid(IntRange),
-    Index(IntRange),
-    Element(String),
-    ChainId(String),
-    Segid(String),
+    Name(Vec<String>),
+    Resname(Vec<String>),
+    Resid(Vec<IntRange>),
+    Index(Vec<IntRange>),
+    ByNum(Vec<IntRange>),
+    Element(Vec<String>),
+    ChainId(Vec<String>),
+    Segid(Vec<String>),
+    Type(Vec<String>),
+    Prop {
+        axis: Axis,
+        operator: Comparison,
+        value: FloatValue,
+        absolute: bool,
+    },
 }
 
 impl Predicate {
     fn matches<A: AtomLike>(&self, atom: &A) -> bool {
         match self {
-            Self::Name(value) => matches_pattern(atom.name(), value),
-            Self::Resname(value) => matches_pattern(atom.resname(), value),
-            Self::Resid(range) => range.contains(i64::from(atom.resid())),
-            Self::Index(range) => i64::try_from(atom.index())
-                .map(|index| range.contains(index))
+            Self::Name(values) => values
+                .iter()
+                .any(|value| matches_pattern(atom.name(), value)),
+            Self::Resname(values) => values
+                .iter()
+                .any(|value| matches_pattern(atom.resname(), value)),
+            Self::Resid(ranges) => ranges
+                .iter()
+                .any(|range| range.contains(i64::from(atom.resid()))),
+            Self::Index(ranges) => i64::try_from(atom.index())
+                .map(|index| ranges.iter().any(|range| range.contains(index)))
                 .unwrap_or(false),
-            Self::Element(value) => atom
+            Self::ByNum(ranges) => i64::try_from(atom.index())
+                .ok()
+                .and_then(|index| index.checked_add(1))
+                .map(|index| ranges.iter().any(|range| range.contains(index)))
+                .unwrap_or(false),
+            Self::Element(values) => atom
                 .element()
-                .is_some_and(|element| matches_pattern(element, value)),
-            Self::ChainId(value) => matches_pattern(atom.chain_id(), value),
-            Self::Segid(value) => matches_pattern(atom.segid(), value),
+                .is_some_and(|element| values.iter().any(|value| matches_pattern(element, value))),
+            Self::ChainId(values) => values
+                .iter()
+                .any(|value| matches_pattern(atom.chain_id(), value)),
+            Self::Segid(values) => values
+                .iter()
+                .any(|value| matches_pattern(atom.segid(), value)),
+            Self::Type(values) => atom.atom_type().is_some_and(|atom_type| {
+                values.iter().any(|value| matches_pattern(atom_type, value))
+            }),
+            Self::Prop {
+                axis,
+                operator,
+                value,
+                absolute,
+            } => {
+                let mut actual = atom.position()[axis.index()];
+                if *absolute {
+                    actual = actual.abs();
+                }
+                operator.matches(actual, value.0)
+            }
         }
     }
 }
 
-/// Match the simple shell-style wildcards accepted by MDAnalysis selectors.
-/// `*` matches any sequence and `?` matches one character; all other
-/// characters are literal. Matching is case-sensitive, as atom names are.
+#[derive(Debug, Clone, Copy)]
+struct FloatValue(f64);
+
+impl PartialEq for FloatValue {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.to_bits() == other.0.to_bits()
+    }
+}
+
+impl Eq for FloatValue {}
+
+impl From<f64> for FloatValue {
+    fn from(value: f64) -> Self {
+        Self(value)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Axis {
+    X,
+    Y,
+    Z,
+}
+
+impl Axis {
+    fn index(self) -> usize {
+        match self {
+            Self::X => 0,
+            Self::Y => 1,
+            Self::Z => 2,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Comparison {
+    Less,
+    LessEqual,
+    Equal,
+    NotEqual,
+    Greater,
+    GreaterEqual,
+}
+
+impl Comparison {
+    fn matches(self, left: f64, right: f64) -> bool {
+        match self {
+            Self::Less => left < right,
+            Self::LessEqual => left <= right,
+            Self::Equal => (left - right).abs() <= 1.0e-6,
+            Self::NotEqual => (left - right).abs() > 1.0e-6,
+            Self::Greater => left > right,
+            Self::GreaterEqual => left >= right,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SameProperty {
+    X,
+    Y,
+    Z,
+    Resid,
+    Resname,
+    Name,
+    Type,
+    Segid,
+    Mass,
+    Charge,
+}
+
+impl SameProperty {
+    fn matches<A: AtomLike>(self, atom: &A, reference: &A) -> bool {
+        match self {
+            Self::X | Self::Y | Self::Z => {
+                let axis = match self {
+                    Self::X => 0,
+                    Self::Y => 1,
+                    Self::Z => 2,
+                    _ => unreachable!(),
+                };
+                (atom.position()[axis] - reference.position()[axis]).abs() <= 1.0e-6
+            }
+            Self::Resid => atom.resid() == reference.resid(),
+            Self::Resname => atom.resname() == reference.resname(),
+            Self::Name => atom.name() == reference.name(),
+            Self::Type => atom.atom_type() == reference.atom_type(),
+            Self::Segid => atom.segid() == reference.segid(),
+            Self::Mass => match (atom.mass(), reference.mass()) {
+                (Some(left), Some(right)) => (left - right).abs() <= 1.0e-6,
+                _ => false,
+            },
+            Self::Charge => match (atom.charge(), reference.charge()) {
+                (Some(left), Some(right)) => (left - right).abs() <= 1.0e-6,
+                _ => false,
+            },
+        }
+    }
+}
+
+fn squared_distance(left: [f64; 3], right: [f64; 3]) -> f64 {
+    left.into_iter()
+        .zip(right)
+        .map(|(a, b)| (a - b) * (a - b))
+        .sum()
+}
+
+fn protein_resnames() -> &'static [&'static str] {
+    &[
+        "ALA", "ARG", "ASN", "ASP", "CYS", "GLN", "GLU", "GLY", "HIS", "HSD", "HSE", "HSP", "ILE",
+        "LEU", "LYS", "MET", "PHE", "PRO", "SER", "THR", "TRP", "TYR", "VAL", "MSE", "CYS2",
+        "CYSH", "HID", "HIE", "HIP", "ASH", "GLH", "ACE", "NME",
+    ]
+}
+
+/// Match the shell-style wildcards accepted by MDAnalysis selectors.
+/// `*` matches any sequence, `?` matches one character, and bracket classes
+/// such as `[NY]` or `[!NY]` match one selected character.
 fn matches_pattern(value: &str, pattern: &str) -> bool {
     let value: Vec<char> = value.chars().collect();
     let pattern: Vec<char> = pattern.chars().collect();
-    let mut states = vec![false; value.len() + 1];
-    states[0] = true;
-    for &token in &pattern {
-        let mut next = vec![false; value.len() + 1];
-        for index in 0..=value.len() {
-            if !states[index] {
-                continue;
+    let mut memo = vec![vec![None; pattern.len() + 1]; value.len() + 1];
+
+    fn visit(
+        value: &[char],
+        pattern: &[char],
+        i: usize,
+        j: usize,
+        memo: &mut [Vec<Option<bool>>],
+    ) -> bool {
+        if let Some(result) = memo[i][j] {
+            return result;
+        }
+        let result = if j == pattern.len() {
+            i == value.len()
+        } else if pattern[j] == '*' {
+            visit(value, pattern, i, j + 1, memo)
+                || (i < value.len() && visit(value, pattern, i + 1, j, memo))
+        } else if i == value.len() {
+            false
+        } else if pattern[j] == '?' {
+            visit(value, pattern, i + 1, j + 1, memo)
+        } else if pattern[j] == '[' {
+            let mut end = j + 1;
+            while end < pattern.len() && pattern[end] != ']' {
+                end += 1;
             }
-            match token {
-                '*' => {
-                    for slot in &mut next[index..] {
-                        *slot = true;
+            if end == pattern.len() {
+                pattern[j] == value[i] && visit(value, pattern, i + 1, j + 1, memo)
+            } else {
+                let mut offset = j + 1;
+                let negated = pattern.get(offset).is_some_and(|c| *c == '!' || *c == '^');
+                if negated {
+                    offset += 1;
+                }
+                let mut matched = false;
+                while offset < end {
+                    if offset + 2 < end && pattern[offset + 1] == '-' {
+                        matched |= pattern[offset] <= value[i] && value[i] <= pattern[offset + 2];
+                        offset += 3;
+                    } else {
+                        matched |= pattern[offset] == value[i];
+                        offset += 1;
                     }
                 }
-                '?' if index < value.len() => next[index + 1] = true,
-                literal if index < value.len() && literal == value[index] => next[index + 1] = true,
-                _ => {}
+                if negated {
+                    matched = !matched;
+                }
+                matched && visit(value, pattern, i + 1, end + 1, memo)
             }
-        }
-        states = next;
+        } else {
+            pattern[j] == value[i] && visit(value, pattern, i + 1, j + 1, memo)
+        };
+        memo[i][j] = Some(result);
+        result
     }
-    states[value.len()]
+
+    visit(&value, &pattern, 0, 0, &mut memo)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -217,8 +488,11 @@ impl IntRange {
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Token {
     Ident(String, usize),
+    Escaped(String, usize),
     Number(i64, usize),
+    Float(FloatValue, usize),
     String(String, usize),
+    Operator(String, usize),
     LParen(usize),
     RParen(usize),
     Colon(usize),
@@ -229,8 +503,11 @@ impl Token {
     fn position(&self) -> usize {
         match self {
             Self::Ident(_, position)
+            | Self::Escaped(_, position)
             | Self::Number(_, position)
+            | Self::Float(_, position)
             | Self::String(_, position)
+            | Self::Operator(_, position)
             | Self::LParen(position)
             | Self::RParen(position)
             | Self::Colon(position)
@@ -241,8 +518,11 @@ impl Token {
     fn display(&self) -> String {
         match self {
             Self::Ident(value, _) => value.clone(),
+            Self::Escaped(value, _) => format!("\\{value}"),
             Self::Number(value, _) => value.to_string(),
+            Self::Float(value, _) => value.0.to_string(),
             Self::String(value, _) => format!("\"{value}\""),
+            Self::Operator(value, _) => value.clone(),
             Self::LParen(_) => "(".to_owned(),
             Self::RParen(_) => ")".to_owned(),
             Self::Colon(_) => ":".to_owned(),
@@ -273,8 +553,18 @@ impl<'a> Lexer<'a> {
                 ')' => Token::RParen(position),
                 ':' => Token::Colon(position),
                 '-' => Token::Dash(position),
+                '<' | '>' | '=' | '!' => self.lex_operator(position, character),
+                '\\' => self.lex_escaped_identifier(position)?,
                 '\'' | '"' => self.lex_string(position, character)?,
                 character if character.is_ascii_digit() => self.lex_number(position, character)?,
+                '.' if self
+                    .chars
+                    .clone()
+                    .next()
+                    .is_some_and(|(_, next)| next.is_ascii_digit()) =>
+                {
+                    self.lex_number(position, character)?
+                }
                 character if is_identifier_start(character) => {
                     self.lex_identifier(position, character)
                 }
@@ -292,20 +582,53 @@ impl<'a> Lexer<'a> {
 
     fn lex_number(&mut self, position: usize, first: char) -> Result<Token, SelectionError> {
         let mut value = String::from(first);
+        let mut is_float = first == '.';
         while let Some((_, character)) = self.chars.clone().next() {
-            if !character.is_ascii_digit() {
+            if character.is_ascii_digit() {
+                value.push(character);
+                self.chars.next();
+            } else if character == '.' || character == 'e' || character == 'E' {
+                is_float = true;
+                value.push(character);
+                self.chars.next();
+                if matches!(character, 'e' | 'E')
+                    && let Some((_, sign @ ('+' | '-'))) = self.chars.clone().next()
+                {
+                    value.push(sign);
+                    self.chars.next();
+                }
+            } else {
                 break;
             }
-            value.push(character);
+        }
+        if is_float {
+            let number = value
+                .parse::<f64>()
+                .map_err(|_| SelectionError::InvalidValue {
+                    predicate: "number".to_owned(),
+                    value,
+                })?;
+            Ok(Token::Float(FloatValue(number), position))
+        } else {
+            let number = value
+                .parse::<i64>()
+                .map_err(|_| SelectionError::InvalidValue {
+                    predicate: "number".to_owned(),
+                    value,
+                })?;
+            Ok(Token::Number(number, position))
+        }
+    }
+
+    fn lex_operator(&mut self, position: usize, first: char) -> Token {
+        let mut value = String::from(first);
+        if let Some((_, '=')) = self.chars.clone().next()
+            && (first == '<' || first == '>' || first == '!' || first == '=')
+        {
+            value.push('=');
             self.chars.next();
         }
-        let number = value
-            .parse::<i64>()
-            .map_err(|_| SelectionError::InvalidValue {
-                predicate: "number".to_owned(),
-                value,
-            })?;
-        Ok(Token::Number(number, position))
+        Token::Operator(value, position)
     }
 
     fn lex_identifier(&mut self, position: usize, first: char) -> Token {
@@ -318,6 +641,18 @@ impl<'a> Lexer<'a> {
             self.chars.next();
         }
         Token::Ident(value, position)
+    }
+
+    fn lex_escaped_identifier(&mut self, position: usize) -> Result<Token, SelectionError> {
+        let Some((_, first)) = self.chars.next() else {
+            return Err(SelectionError::UnexpectedEnd {
+                context: "escaped value",
+            });
+        };
+        Ok(match self.lex_identifier(position, first) {
+            Token::Ident(value, _) => Token::Escaped(value, position),
+            token => token,
+        })
     }
 
     fn lex_string(&mut self, position: usize, quote: char) -> Result<Token, SelectionError> {
@@ -344,11 +679,55 @@ impl<'a> Lexer<'a> {
 }
 
 fn is_identifier_start(character: char) -> bool {
-    character.is_ascii_alphanumeric() || matches!(character, '_' | '*' | '?' | '.' | '+' | '/')
+    character.is_ascii_alphanumeric()
+        || matches!(character, '_' | '*' | '?' | '.' | '+' | '/' | '[')
 }
 
 fn is_identifier_continue(character: char) -> bool {
-    is_identifier_start(character) || matches!(character, '#' | '@' | '%')
+    is_identifier_start(character) || matches!(character, '#' | '@' | '%' | ']' | '!' | '-')
+}
+
+fn is_selection_keyword(value: &str) -> bool {
+    matches!(
+        value.to_ascii_lowercase().as_str(),
+        "all"
+            | "none"
+            | "and"
+            | "or"
+            | "not"
+            | "protein"
+            | "backbone"
+            | "global"
+            | "byres"
+            | "name"
+            | "resname"
+            | "resid"
+            | "resnum"
+            | "index"
+            | "bynum"
+            | "element"
+            | "chainid"
+            | "segid"
+            | "type"
+            | "prop"
+            | "around"
+            | "point"
+            | "same"
+            | "atom"
+            | "as"
+    )
+}
+
+fn parse_comparison(value: &str) -> Option<Comparison> {
+    match value {
+        "<" => Some(Comparison::Less),
+        "<=" => Some(Comparison::LessEqual),
+        "==" => Some(Comparison::Equal),
+        "!=" => Some(Comparison::NotEqual),
+        ">" => Some(Comparison::Greater),
+        ">=" => Some(Comparison::GreaterEqual),
+        _ => None,
+    }
 }
 
 struct Parser {
@@ -434,39 +813,99 @@ impl Parser {
         match predicate.to_ascii_lowercase().as_str() {
             "all" => Ok(Expr::All),
             "none" => Ok(Expr::None),
+            "protein" => Ok(Expr::Protein),
+            "backbone" => Ok(Expr::Backbone),
+            "global" => Ok(Expr::Global(Box::new(self.parse_unary()?))),
+            "byres" => Ok(Expr::ByRes(Box::new(self.parse_unary()?))),
             "name" => Ok(Expr::Predicate(Predicate::Name(
-                self.parse_string_value("name")?,
+                self.parse_string_values("name")?,
             ))),
             "resname" => Ok(Expr::Predicate(Predicate::Resname(
-                self.parse_string_value("resname")?,
+                self.parse_string_values("resname")?,
             ))),
             "element" => Ok(Expr::Predicate(Predicate::Element(
-                self.parse_string_value("element")?,
+                self.parse_string_values("element")?,
             ))),
             "chainid" => Ok(Expr::Predicate(Predicate::ChainId(
-                self.parse_string_value("chainID")?,
+                self.parse_string_values("chainID")?,
             ))),
             "segid" => Ok(Expr::Predicate(Predicate::Segid(
-                self.parse_string_value("segid")?,
+                self.parse_string_values("segid")?,
+            ))),
+            "type" => Ok(Expr::Predicate(Predicate::Type(
+                self.parse_string_values("type")?,
             ))),
             "resid" | "resnum" => Ok(Expr::Predicate(Predicate::Resid(
-                self.parse_range("resid")?,
+                self.parse_ranges("resid")?,
             ))),
             "index" => Ok(Expr::Predicate(Predicate::Index(
-                self.parse_range("index")?,
+                self.parse_ranges("index")?,
             ))),
+            "bynum" => Ok(Expr::Predicate(Predicate::ByNum(
+                self.parse_ranges("bynum")?,
+            ))),
+            "prop" => self.parse_prop(),
+            "around" => {
+                let cutoff = self.parse_float("around")?;
+                let selection = self.parse_unary()?;
+                Ok(Expr::Around {
+                    cutoff: FloatValue(cutoff),
+                    selection: Box::new(selection),
+                })
+            }
+            "point" => {
+                let x = self.parse_float("point")?;
+                let y = self.parse_float("point")?;
+                let z = self.parse_float("point")?;
+                let cutoff = self.parse_float("point")?;
+                Ok(Expr::Point {
+                    point: [FloatValue(x), FloatValue(y), FloatValue(z)],
+                    cutoff: FloatValue(cutoff),
+                })
+            }
+            "same" => self.parse_same(),
+            "atom" => {
+                let segid = self.parse_one_string("atom")?;
+                let resid = self.parse_signed_integer("atom")?;
+                let name = self.parse_one_string("atom")?;
+                Ok(Expr::Atom { segid, resid, name })
+            }
             _ => Err(SelectionError::UnknownPredicate(predicate)),
         }
     }
 
-    fn parse_string_value(&mut self, predicate: &str) -> Result<String, SelectionError> {
+    fn parse_string_values(&mut self, predicate: &str) -> Result<Vec<String>, SelectionError> {
+        let mut values = Vec::new();
+        while let Some(token) = self.peek() {
+            let value = match token {
+                Token::Ident(value, _) if !is_selection_keyword(value) => value.clone(),
+                Token::Escaped(value, _) => value.clone(),
+                Token::String(value, _) => value.clone(),
+                Token::Number(number, _) => number.to_string(),
+                _ => break,
+            };
+            let _ = self.next();
+            values.push(value);
+        }
+        if values.is_empty() {
+            return Err(SelectionError::UnexpectedEnd {
+                context: "predicate value",
+            });
+        }
+        let _ = predicate;
+        Ok(values)
+    }
+
+    fn parse_one_string(&mut self, predicate: &str) -> Result<String, SelectionError> {
         let Some(token) = self.next() else {
             return Err(SelectionError::UnexpectedEnd {
                 context: "predicate value",
             });
         };
         match token {
-            Token::Ident(value, _) | Token::String(value, _) => Ok(value),
+            Token::Ident(value, _) | Token::Escaped(value, _) | Token::String(value, _) => {
+                Ok(value)
+            }
             Token::Number(number, _) => Ok(number.to_string()),
             token => Err(SelectionError::InvalidValue {
                 predicate: predicate.to_owned(),
@@ -475,23 +914,140 @@ impl Parser {
         }
     }
 
-    fn parse_range(&mut self, predicate: &str) -> Result<IntRange, SelectionError> {
-        let start = self.parse_signed_integer(predicate)?;
-        let end = if self.consume_range_separator() {
-            self.parse_signed_integer(predicate)?
-        } else {
-            start
-        };
-        if start > end {
-            return Err(SelectionError::InvalidRange { start, end });
+    fn parse_ranges(&mut self, predicate: &str) -> Result<Vec<IntRange>, SelectionError> {
+        let mut ranges = Vec::new();
+        loop {
+            let can_start = matches!(self.peek(), Some(Token::Number(_, _) | Token::Dash(_)));
+            if !can_start {
+                break;
+            }
+            let start = self.parse_signed_integer(predicate)?;
+            let end = if self.consume_range_separator() {
+                self.parse_signed_integer(predicate)?
+            } else {
+                start
+            };
+            if start > end {
+                return Err(SelectionError::InvalidRange { start, end });
+            }
+            if matches!(predicate, "index" | "bynum") && start < 0 {
+                return Err(SelectionError::InvalidValue {
+                    predicate: predicate.to_owned(),
+                    value: start.to_string(),
+                });
+            }
+            ranges.push(IntRange { start, end });
         }
-        if predicate == "index" && start < 0 {
-            return Err(SelectionError::InvalidValue {
-                predicate: predicate.to_owned(),
-                value: start.to_string(),
+        if ranges.is_empty() {
+            return Err(SelectionError::UnexpectedEnd {
+                context: "numeric value",
             });
         }
-        Ok(IntRange { start, end })
+        Ok(ranges)
+    }
+
+    fn parse_float(&mut self, predicate: &str) -> Result<f64, SelectionError> {
+        let negative = matches!(self.peek(), Some(Token::Dash(_)));
+        if negative {
+            let _ = self.next();
+        }
+        let Some(token) = self.next() else {
+            return Err(SelectionError::UnexpectedEnd {
+                context: "numeric value",
+            });
+        };
+        let mut value = match token {
+            Token::Number(number, _) => number as f64,
+            Token::Float(number, _) => number.0,
+            token => {
+                return Err(SelectionError::InvalidValue {
+                    predicate: predicate.to_owned(),
+                    value: token.display(),
+                });
+            }
+        };
+        if negative {
+            value = -value;
+        }
+        Ok(value)
+    }
+
+    fn parse_prop(&mut self) -> Result<Expr, SelectionError> {
+        let mut absolute = false;
+        if self.consume_keyword("abs") {
+            absolute = true;
+        }
+        let axis_name = self.parse_one_string("prop")?;
+        let axis = match axis_name.to_ascii_lowercase().as_str() {
+            "x" => Axis::X,
+            "y" => Axis::Y,
+            "z" => Axis::Z,
+            _ => {
+                return Err(SelectionError::InvalidValue {
+                    predicate: "prop".to_owned(),
+                    value: axis_name,
+                });
+            }
+        };
+        let Some(token) = self.next() else {
+            return Err(SelectionError::UnexpectedEnd {
+                context: "operator",
+            });
+        };
+        let operator = match token {
+            Token::Operator(value, _) => {
+                parse_comparison(&value).ok_or_else(|| SelectionError::InvalidValue {
+                    predicate: "prop".to_owned(),
+                    value,
+                })?
+            }
+            token => {
+                return Err(SelectionError::InvalidValue {
+                    predicate: "prop".to_owned(),
+                    value: token.display(),
+                });
+            }
+        };
+        let value = self.parse_float("prop")?;
+        Ok(Expr::Predicate(Predicate::Prop {
+            axis,
+            operator,
+            value: FloatValue(value),
+            absolute,
+        }))
+    }
+
+    fn parse_same(&mut self) -> Result<Expr, SelectionError> {
+        let property = self.parse_one_string("same")?;
+        let property = match property.to_ascii_lowercase().as_str() {
+            "x" => SameProperty::X,
+            "y" => SameProperty::Y,
+            "z" => SameProperty::Z,
+            "resid" | "resnum" => SameProperty::Resid,
+            "resname" => SameProperty::Resname,
+            "name" => SameProperty::Name,
+            "type" => SameProperty::Type,
+            "segid" | "segment" => SameProperty::Segid,
+            "mass" => SameProperty::Mass,
+            "charge" => SameProperty::Charge,
+            _ => {
+                return Err(SelectionError::InvalidValue {
+                    predicate: "same".to_owned(),
+                    value: property,
+                });
+            }
+        };
+        if !self.consume_keyword("as") {
+            return Err(SelectionError::UnexpectedToken {
+                position: self.peek().map_or(0, Token::position),
+                token: self.peek().map_or_else(|| "".to_owned(), Token::display),
+            });
+        }
+        let selection = self.parse_or()?;
+        Ok(Expr::Same {
+            property,
+            selection: Box::new(selection),
+        })
     }
 
     fn parse_signed_integer(&mut self, predicate: &str) -> Result<i64, SelectionError> {
@@ -554,8 +1110,10 @@ mod tests {
         resid: i32,
         index: usize,
         element: Option<&'static str>,
+        atom_type: Option<&'static str>,
         chain_id: &'static str,
         segid: &'static str,
+        position: [f64; 3],
     }
 
     impl AtomLike for TestAtom {
@@ -574,11 +1132,17 @@ mod tests {
         fn element(&self) -> Option<&str> {
             self.element
         }
+        fn atom_type(&self) -> Option<&str> {
+            self.atom_type
+        }
         fn chain_id(&self) -> &str {
             self.chain_id
         }
         fn segid(&self) -> &str {
             self.segid
+        }
+        fn position(&self) -> [f64; 3] {
+            self.position
         }
     }
 
@@ -590,8 +1154,10 @@ mod tests {
                 resid: 1,
                 index: 0,
                 element: Some("C"),
+                atom_type: Some("CT1"),
                 chain_id: "A",
                 segid: "PROT",
+                position: [0.0, 0.0, 0.0],
             },
             TestAtom {
                 name: "N",
@@ -599,8 +1165,10 @@ mod tests {
                 resid: 1,
                 index: 1,
                 element: Some("N"),
+                atom_type: Some("NH1"),
                 chain_id: "A",
                 segid: "PROT",
+                position: [1.0, 0.0, 0.0],
             },
             TestAtom {
                 name: "OW",
@@ -608,8 +1176,10 @@ mod tests {
                 resid: 8,
                 index: 2,
                 element: Some("O"),
+                atom_type: Some("OT"),
                 chain_id: "B",
                 segid: "WAT",
+                position: [0.0, 0.0, 3.0],
             },
         ]
     }
@@ -643,8 +1213,10 @@ mod tests {
                 resid: 1,
                 index: 0,
                 element: Some("C"),
+                atom_type: Some("CT1"),
                 chain_id: "A",
                 segid: "PROT",
+                position: [0.0, 0.0, 0.0],
             },
             TestAtom {
                 name: "CB",
@@ -652,12 +1224,45 @@ mod tests {
                 resid: 1,
                 index: 1,
                 element: Some("C"),
+                atom_type: Some("CT2"),
                 chain_id: "A",
                 segid: "PROT",
+                position: [1.0, 0.0, 0.0],
             },
         ];
         assert_eq!(select(&atoms, "name C?").unwrap().len(), 2);
         assert_eq!(select(&atoms, "name C*").unwrap().len(), 2);
+        assert_eq!(select(&atoms, "name C[AB]").unwrap().len(), 2);
+        assert_eq!(select(&atoms, "name C[!A]").unwrap().len(), 1);
+    }
+
+    #[test]
+    fn extended_builtin_and_value_selectors_work() {
+        let atoms = atoms();
+        assert_eq!(select(&atoms, "protein").unwrap().len(), 2);
+        assert_eq!(select(&atoms, "backbone").unwrap().len(), 2);
+        assert_eq!(select(&atoms, "type CT1").unwrap().len(), 1);
+        assert_eq!(select(&atoms, "name CA N").unwrap().len(), 2);
+        assert_eq!(select(&atoms, "resid 1 8").unwrap().len(), 3);
+        assert_eq!(select(&atoms, "bynum 1").unwrap().len(), 1);
+        assert_eq!(select(&atoms, "bynum 1:2").unwrap().len(), 2);
+        assert_eq!(select(&atoms, "resname \\protein").unwrap().len(), 0);
+        assert_eq!(select(&atoms, "atom PROT 1 CA").unwrap().len(), 1);
+    }
+
+    #[test]
+    fn spatial_property_and_same_selectors_work() {
+        let atoms = atoms();
+        assert_eq!(select(&atoms, "prop x <= 0.5").unwrap().len(), 2);
+        assert_eq!(select(&atoms, "prop x == 1").unwrap().len(), 1);
+        assert_eq!(select(&atoms, "prop abs z < 2").unwrap().len(), 2);
+        assert_eq!(select(&atoms, "point 0 0 0 1.01").unwrap().len(), 2);
+        assert_eq!(select(&atoms, "point .5 0 0 .6").unwrap().len(), 2);
+        assert_eq!(select(&atoms, "around 1.01 name CA").unwrap().len(), 1);
+        assert_eq!(select(&atoms, "same resname as resid 1").unwrap().len(), 2);
+        assert_eq!(select(&atoms, "same x as index 0").unwrap().len(), 2);
+        assert_eq!(select(&atoms, "global backbone").unwrap().len(), 2);
+        assert_eq!(select(&atoms, "byres name CA").unwrap().len(), 2);
     }
 
     #[test]
