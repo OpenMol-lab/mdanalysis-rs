@@ -65,8 +65,8 @@ pub use pdbqt::{PdbqtAtom, PdbqtError, PdbqtStructure, read_pdbqt, write_pdbqt};
 pub use psf::{PsfAtom, PsfBond, PsfError, PsfStructure, read_psf, write_psf};
 pub use topology_groups::{AngleValue, BondLength, DihedralValue, TopologyGroupExt};
 pub use xdr::{
-    TrrFile, TrrPrecision, TrrWriteOptions, XdrError, XtcFile, XtcWriteOptions, read_trr,
-    read_xtc, write_trr, write_xtc,
+    TrrFile, TrrPrecision, TrrWriteOptions, XdrError, XtcFile, XtcWriteOptions, read_trr, read_xtc,
+    write_trr, write_xtc,
 };
 
 pub type Result<T> = std::result::Result<T, Error>;
