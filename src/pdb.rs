@@ -80,6 +80,7 @@ pub struct PdbStructure {
 
 impl PdbStructure {
     /// Parse a PDB document from a UTF-8 string.
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(input: &str) -> Result<Self, PdbError> {
         Self::parse_lines(input.lines())
     }
@@ -152,7 +153,7 @@ impl PdbStructure {
                     writeln!(writer, "{}", format_atom(&atom.with_position(position)))?;
                 }
             }
-            frame_count => {
+            _ => {
                 for (index, frame) in self.frames.iter().enumerate() {
                     validate_frame(self, index)?;
                     writeln!(writer, "MODEL{:>9}", index + 1)?;
@@ -161,7 +162,6 @@ impl PdbStructure {
                     }
                     writeln!(writer, "ENDMDL")?;
                 }
-                debug_assert_eq!(frame_count, self.frames.len());
             }
         }
 
@@ -264,6 +264,14 @@ impl PdbStructure {
                 cryst1,
             })
         }
+    }
+}
+
+impl std::str::FromStr for PdbStructure {
+    type Err = PdbError;
+
+    fn from_str(input: &str) -> Result<Self, Self::Err> {
+        Self::parse_lines(input.lines())
     }
 }
 
@@ -520,7 +528,7 @@ mod tests {
         assert_eq!(structure.num_frames(), 1);
         assert_eq!(structure.atoms[0].serial, 1);
         assert_eq!(structure.atoms[0].residue_name, "ALA");
-        assert_eq!(structure.atoms[1].hetatm, true);
+        assert!(structure.atoms[1].hetatm);
         assert_eq!(structure.atoms[1].occupancy, Some(0.5));
         assert_eq!(structure.cryst1.as_ref().map(|cell| cell.a), Some(10.0));
         assert_eq!(structure.frame(0).expect("frame")[1], [4.0, 5.0, 6.0]);
