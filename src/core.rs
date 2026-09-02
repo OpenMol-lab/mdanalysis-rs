@@ -1,6 +1,7 @@
 //! Core topology and trajectory objects.
 
 use crate::coordinates::CoordinateFile;
+use crate::formats::Structure;
 use crate::pdb::{PdbAtom, PdbStructure, read_pdb};
 use crate::selection::{AtomLike, SelectionError, select};
 use std::path::Path;
@@ -541,6 +542,22 @@ impl Universe {
         Self::from_coordinate_file(CoordinateFile::from_gro_str(input)?)
     }
 
+    pub fn from_pqr(path: impl AsRef<Path>) -> crate::Result<Self> {
+        Self::from_format_structure(crate::formats::read_pqr(path)?)
+    }
+
+    pub fn from_pqr_str(input: &str) -> crate::Result<Self> {
+        Self::from_format_structure(Structure::from_pqr_str(input)?)
+    }
+
+    pub fn from_mol2(path: impl AsRef<Path>) -> crate::Result<Self> {
+        Self::from_format_structure(crate::formats::read_mol2(path)?)
+    }
+
+    pub fn from_mol2_str(input: &str) -> crate::Result<Self> {
+        Self::from_format_structure(Structure::from_mol2_str(input)?)
+    }
+
     fn from_coordinate_file(file: CoordinateFile) -> crate::Result<Self> {
         let first = file.frames.first().ok_or_else(|| {
             crate::Error::InvalidInput("coordinate file has no frames".to_string())
@@ -582,6 +599,40 @@ impl Universe {
             topology,
             trajectory: Trajectory::new(frames),
         })
+    }
+
+    fn from_format_structure(structure: Structure) -> crate::Result<Self> {
+        let mut atoms = Vec::with_capacity(structure.atoms.len());
+        for (index, source) in structure.atoms.iter().enumerate() {
+            let mut atom = Atom::new(index, source.name.clone(), source.position());
+            atom.resid = source.residue_id;
+            atom.resname = source.residue_name.clone();
+            atom.segid = source.segment_id.clone().unwrap_or_default();
+            atom.chain_id = source.chain_id.clone().unwrap_or_default();
+            atom.charge = source.charge.unwrap_or(0.0);
+            atom.element = infer_element(source.atom_type.as_deref().unwrap_or(&source.name));
+            atom.mass = atom
+                .element
+                .as_deref()
+                .and_then(element_mass)
+                .unwrap_or(0.0);
+            atoms.push(atom);
+        }
+        let mut topology = Topology::new(atoms);
+        for bond in structure.bonds {
+            let atom1 = structure
+                .atoms
+                .iter()
+                .position(|atom| atom.serial == bond.atom1);
+            let atom2 = structure
+                .atoms
+                .iter()
+                .position(|atom| atom.serial == bond.atom2);
+            if let (Some(atom1), Some(atom2)) = (atom1, atom2) {
+                topology.add_bond(Bond::new(atom1, atom2));
+            }
+        }
+        Ok(Self::new(topology))
     }
 
     /// Write the current topology and all trajectory frames as a PDB file.
@@ -769,6 +820,19 @@ mod tests {
         let universe = sample();
         assert_eq!(universe.select_atoms("name CA").unwrap().len(), 1);
         assert_eq!(universe.select_atoms("resid 2").unwrap().len(), 1);
+    }
+
+    #[test]
+    fn pqr_and_mol2_constructors_build_topology() {
+        let pqr = "ATOM      1  C1  LIG A   1       0.0  0.0  0.0  0.0  1.7\n";
+        let universe = Universe::from_pqr_str(pqr).unwrap();
+        assert_eq!(universe.n_atoms(), 1);
+        assert_eq!(universe.topology.atoms[0].charge, 0.0);
+        let mol2 = "@<TRIPOS>MOLECULE\nwater\n2 1 0 0 0\nSMALL\nUSER_CHARGES\n\n@<TRIPOS>ATOM\n      1 O 0.0 0.0 0.0 O.2 1 HOH -0.8\n      2 H 1.0 0.0 0.0 H 1 HOH 0.4\n@<TRIPOS>BOND\n     1 1 2 1\n";
+        let universe = Universe::from_mol2_str(mol2).unwrap();
+        assert_eq!(universe.n_atoms(), 2);
+        assert_eq!(universe.topology.bonds.len(), 1);
+        assert_eq!(universe.topology.bonds[0].partner(0), Some(1));
     }
 
     #[test]
