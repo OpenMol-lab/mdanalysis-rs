@@ -107,7 +107,7 @@ impl AtomLike for Atom {
 
 impl From<PdbAtom> for Atom {
     fn from(atom: PdbAtom) -> Self {
-        let element = atom.element.clone();
+        let element = atom.element.clone().or_else(|| infer_element(&atom.name));
         let position = atom.position();
         let chain_id = atom.chain_id.map(|id| id.to_string()).unwrap_or_default();
         Self {
@@ -1788,6 +1788,17 @@ mod tests {
         let universe = sample();
         assert_eq!(universe.select_atoms("name CA").unwrap().len(), 1);
         assert_eq!(universe.select_atoms("resid 2").unwrap().len(), 1);
+    }
+
+    #[test]
+    fn xpdb_constructor_preserves_five_digit_residues() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../mdanalysis/testsuite/MDAnalysisTests/data/5digitResid.pdb");
+        let universe = Universe::from_xpdb(path).expect("valid XPDB fixture");
+        assert_eq!(universe.n_atoms(), 5);
+        assert_eq!(universe.n_residues(), 5);
+        assert_eq!(universe.topology.atoms[4].resid, 10_000);
+        assert_eq!(universe.topology.atoms[4].element.as_deref(), Some("O"));
     }
 
     #[test]
