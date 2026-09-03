@@ -8,6 +8,7 @@
 use crate::coordinates::{CoordinateFile, CoordinateFrame};
 use crate::core::{Atom, Frame, Topology, Trajectory, Universe};
 use crate::mdamath::triclinic_box;
+use bzip2::read::BzDecoder;
 use flate2::read::GzDecoder;
 use std::fmt;
 use std::fs::File;
@@ -53,6 +54,11 @@ impl TrcFile {
             let mut decompressed = Vec::new();
             decoder.read_to_end(&mut decompressed)?;
             decompressed
+        } else if bytes.starts_with(b"BZh") {
+            let mut decoder = BzDecoder::new(Cursor::new(bytes));
+            let mut decompressed = Vec::new();
+            decoder.read_to_end(&mut decompressed)?;
+            decompressed
         } else {
             bytes.to_vec()
         };
@@ -73,6 +79,36 @@ impl TrcFile {
         self.coordinates.n_frames()
     }
 
+    /// Read and concatenate several TRC files in source order.
+    ///
+    /// This is the in-memory equivalent of MDAnalysis' ``continuous=True``
+    /// multi-file trajectory mode. Every input must contain at least one
+    /// frame and all files must have the same atom count. Frame step and time
+    /// values are retained exactly as written in each source file.
+    pub fn read_files<I, P>(paths: I) -> Result<Self, TrcError>
+    where
+        I: IntoIterator<Item = P>,
+        P: AsRef<Path>,
+    {
+        let mut files = paths.into_iter();
+        let first = files
+            .next()
+            .ok_or_else(|| invalid("no TRC paths were supplied"))?;
+        let mut result = Self::read_file(first)?;
+        let expected_atoms = result.n_atoms();
+        for path in files {
+            let next = Self::read_file(path)?;
+            if next.n_atoms() != expected_atoms {
+                return Err(invalid(format!(
+                    "TRC file contains {} atoms; expected {expected_atoms}",
+                    next.n_atoms()
+                )));
+            }
+            result.coordinates.frames.extend(next.coordinates.frames);
+        }
+        Ok(result)
+    }
+
     /// Construct a coordinate-only universe from this trajectory.
     pub fn to_universe(&self) -> crate::Result<Universe> {
         Universe::from_trc_file(self.clone())
@@ -82,6 +118,15 @@ impl TrcFile {
 /// Read a TRC trajectory from a path.
 pub fn read_trc(path: impl AsRef<Path>) -> Result<TrcFile, TrcError> {
     TrcFile::read_file(path)
+}
+
+/// Read and concatenate several TRC trajectories in source order.
+pub fn read_trc_files<I, P>(paths: I) -> Result<TrcFile, TrcError>
+where
+    I: IntoIterator<Item = P>,
+    P: AsRef<Path>,
+{
+    TrcFile::read_files(paths)
 }
 
 impl CoordinateFile {
@@ -146,6 +191,59 @@ impl Universe {
             trajectory: Trajectory::new(frames),
         })
     }
+
+    /// Construct a universe from a PDB topology and one TRC trajectory.
+    pub fn from_pdb_and_trc(
+        pdb_path: impl AsRef<Path>,
+        trc_path: impl AsRef<Path>,
+    ) -> crate::Result<Self> {
+        let universe = Self::from_pdb(pdb_path)?;
+        attach_trc(universe, read_trc(trc_path)?)
+    }
+
+    /// Construct a universe from a PDB topology and several concatenated TRC
+    /// trajectories.
+    pub fn from_pdb_and_trc_files<I, P>(
+        pdb_path: impl AsRef<Path>,
+        trc_paths: I,
+    ) -> crate::Result<Self>
+    where
+        I: IntoIterator<Item = P>,
+        P: AsRef<Path>,
+    {
+        let universe = Self::from_pdb(pdb_path)?;
+        attach_trc(universe, TrcFile::read_files(trc_paths)?)
+    }
+
+    /// Construct a universe from PDB text and TRC bytes.
+    pub fn from_pdb_and_trc_bytes(pdb: &str, trc: &[u8]) -> crate::Result<Self> {
+        let universe = Self::from_pdb_str(pdb)?;
+        attach_trc(universe, TrcFile::from_bytes(trc)?)
+    }
+}
+
+fn attach_trc(mut universe: Universe, file: TrcFile) -> crate::Result<Universe> {
+    if universe.n_atoms() != file.n_atoms() {
+        return Err(crate::Error::InvalidInput(format!(
+            "TRC contains {} atoms, topology contains {}",
+            file.n_atoms(),
+            universe.n_atoms()
+        )));
+    }
+    let frames = file
+        .coordinates
+        .frames
+        .into_iter()
+        .map(|source| {
+            let mut frame = Frame::new(source.positions);
+            frame.dimensions = source.dimensions;
+            frame.step = source.step;
+            frame.time = source.time;
+            frame
+        })
+        .collect();
+    universe.trajectory = Trajectory::new(frames);
+    Ok(universe)
 }
 
 /// Errors produced while reading a TRC document.
@@ -504,5 +602,38 @@ mod tests {
         assert_eq!(universe.n_atoms(), 73);
         assert_eq!(universe.n_frames(), 3);
         assert_eq!(universe.trajectory.frames[0].time, 0.0);
+    }
+
+    #[test]
+    fn concatenates_multiple_files_and_attaches_pdb_topology() {
+        let first = fixture("gromos11_traj_vac_1.trc.gz");
+        let second = fixture("gromos11_traj_vac_2.trc.gz");
+        let file = TrcFile::read_files([&first, &second]).unwrap();
+        assert_eq!(file.n_atoms(), 73);
+        assert_eq!(file.n_frames(), 6);
+        assert_eq!(file.coordinates.frames[0].step, 0);
+        assert_eq!(file.coordinates.frames[3].step, 0);
+        assert_eq!(file.coordinates.frames[5].time, 100.0);
+
+        let pdb = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../mdanalysis/testsuite/MDAnalysisTests/data/gromos11/gromos11_traj_vac.pdb.gz");
+        let universe = Universe::from_pdb_and_trc_files(&pdb, [&first, &second]).unwrap();
+        assert_eq!(universe.n_atoms(), 73);
+        assert_eq!(universe.n_frames(), 6);
+        assert!(!universe.topology.bonds.is_empty());
+        assert_eq!(universe.trajectory.frames[4].step, 10000);
+    }
+
+    #[test]
+    fn accepts_bzip2_bytes_and_rejects_empty_path_lists() {
+        let source = std::fs::read(fixture("gromos11_traj_vac_1.trc.gz")).unwrap();
+        let mut decoder = GzDecoder::new(Cursor::new(source));
+        let mut plain = Vec::new();
+        decoder.read_to_end(&mut plain).unwrap();
+        let mut encoder = bzip2::write::BzEncoder::new(Vec::new(), bzip2::Compression::default());
+        std::io::Write::write_all(&mut encoder, &plain).unwrap();
+        let compressed = encoder.finish().unwrap();
+        assert_eq!(TrcFile::from_bytes(&compressed).unwrap().n_frames(), 3);
+        assert!(TrcFile::read_files::<Vec<PathBuf>, PathBuf>(Vec::new()).is_err());
     }
 }

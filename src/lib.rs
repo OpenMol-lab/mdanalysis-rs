@@ -121,7 +121,7 @@ pub use tpr::{
     TprAtom, TprBond, TprData, TprError, TprFile, TprHeader, TprPrecision, TprSimBox, TprStructure,
     TprTopology, read_tpr,
 };
-pub use trc::{TrcData, TrcError, TrcFile, TrcStructure, read_trc};
+pub use trc::{TrcData, TrcError, TrcFile, TrcStructure, read_trc, read_trc_files};
 pub use trj::{MdcrdFile, TrjData, TrjError, TrjFile, TrjStructure, read_trj, read_trj_with_dt};
 pub use trz::{TrzError, TrzFile, TrzHeader, TrzWriteOptions, read_trz, write_trz};
 pub use txyz::{
