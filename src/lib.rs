@@ -13,11 +13,13 @@ pub mod correlations;
 pub mod dcd;
 pub mod distances;
 pub mod dlpoly;
+pub mod dms;
 pub mod fhiaims;
 pub mod formats;
 pub mod geometry;
 pub mod gms;
 pub mod guesser;
+pub mod itp;
 pub mod lammps;
 pub mod mdamath;
 pub mod neighbor_search;
@@ -55,6 +57,7 @@ pub use dlpoly::{
     ConfigFile, DlpolyConfig, DlpolyError, DlpolyFrame, DlpolyHistory, HistoryFile, read_config,
     read_history, write_config, write_config_file, write_history, write_history_file,
 };
+pub use dms::{DmsBond, DmsError, DmsFile, DmsParticle, read_dms};
 pub use fhiaims::{
     FhiaimsData, FhiaimsError, FhiaimsFile, FhiaimsStructure, read_fhiaims, write_fhiaims,
     write_fhiaims_file,
@@ -69,6 +72,11 @@ pub use geometry::{
 };
 pub use gms::{GmsAtom, GmsData, GmsError, GmsFile, GmsParser, GmsReader, GmsStructure, read_gms};
 pub use guesser::{Guesser, GuesserError, guess_bonds, guess_element, guess_mass};
+pub use itp::{
+    ItpAngle, ItpAtom, ItpAtomType, ItpBond, ItpData, ItpDihedral, ItpError, ItpImproper,
+    ItpMoleculeCount, ItpMoleculeType, ItpOptions, ItpSettle, ItpStructure, read_itp,
+    read_itp_file, read_itp_with_options,
+};
 pub use lammps::{
     LammpsAtom, LammpsBond, LammpsBox, LammpsCoordinateConvention, LammpsData, LammpsDataFile,
     LammpsDumpData, LammpsDumpFile, LammpsDumpFrame, LammpsDumpOptions, LammpsDumpReader,
@@ -106,11 +114,13 @@ pub enum Error {
     Txyz(txyz::TxyzError),
     Psf(PsfError),
     Dcd(dcd::DcdError),
+    Dms(dms::DmsError),
     Dlpoly(dlpoly::DlpolyError),
     Coordinate(CoordinateError),
     Format(formats::FormatError),
     Fhiaims(fhiaims::FhiaimsError),
     Gms(gms::GmsError),
+    Itp(itp::ItpError),
     Distance(DistanceError),
     Guesser(guesser::GuesserError),
     Selection(selection::SelectionError),
@@ -129,11 +139,13 @@ impl std::fmt::Display for Error {
             Self::Txyz(error) => write!(f, "Tinker XYZ error: {error}"),
             Self::Psf(error) => write!(f, "PSF error: {error}"),
             Self::Dcd(error) => write!(f, "DCD error: {error}"),
+            Self::Dms(error) => write!(f, "DMS error: {error}"),
             Self::Dlpoly(error) => write!(f, "DL_POLY error: {error}"),
             Self::Coordinate(error) => write!(f, "coordinate error: {error}"),
             Self::Format(error) => write!(f, "format error: {error}"),
             Self::Fhiaims(error) => write!(f, "FHI-AIMS error: {error}"),
             Self::Gms(error) => write!(f, "GMS error: {error}"),
+            Self::Itp(error) => write!(f, "ITP error: {error}"),
             Self::Distance(error) => write!(f, "distance error: {error}"),
             Self::Guesser(error) => write!(f, "guesser error: {error}"),
             Self::Selection(error) => write!(f, "selection error: {error}"),
@@ -198,6 +210,12 @@ impl From<dcd::DcdError> for Error {
     }
 }
 
+impl From<dms::DmsError> for Error {
+    fn from(error: dms::DmsError) -> Self {
+        Self::Dms(error)
+    }
+}
+
 impl From<dlpoly::DlpolyError> for Error {
     fn from(error: dlpoly::DlpolyError) -> Self {
         Self::Dlpoly(error)
@@ -225,6 +243,12 @@ impl From<fhiaims::FhiaimsError> for Error {
 impl From<gms::GmsError> for Error {
     fn from(error: gms::GmsError) -> Self {
         Self::Gms(error)
+    }
+}
+
+impl From<itp::ItpError> for Error {
+    fn from(error: itp::ItpError) -> Self {
+        Self::Itp(error)
     }
 }
 
