@@ -429,6 +429,16 @@ impl Trajectory {
         self.frames.get(index)
     }
 
+    /// Return the frame most recently yielded by [`Self::next`]. Before any
+    /// advancement, this is the first frame when one exists.
+    pub fn current_frame(&self) -> Option<&Frame> {
+        if self.current == 0 {
+            self.frames.first()
+        } else {
+            self.frames.get(self.current - 1)
+        }
+    }
+
     pub fn frame_mut(&mut self, index: usize) -> Option<&mut Frame> {
         self.frames.get_mut(index)
     }
@@ -443,6 +453,12 @@ impl Trajectory {
             self.current += 1;
         }
         frame
+    }
+
+    /// Advance to and return the next frame.
+    #[allow(clippy::should_implement_trait)]
+    pub fn next(&mut self) -> Option<&Frame> {
+        self.next_frame()
     }
 }
 
@@ -2143,5 +2159,20 @@ mod tests {
             [5.0, 0.0, 0.0]
         );
         assert_eq!(universe.atoms().positions()[0], [5.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn trajectory_next_alias_tracks_current_frame_and_end() {
+        let mut trajectory = Trajectory::new(vec![
+            Frame::new(vec![[1.0, 0.0, 0.0]]),
+            Frame::new(vec![[2.0, 0.0, 0.0]]),
+        ]);
+        assert_eq!(trajectory.current_frame().unwrap().positions[0][0], 1.0);
+        assert_eq!(trajectory.next().unwrap().positions[0][0], 1.0);
+        assert_eq!(trajectory.current_frame().unwrap().positions[0][0], 1.0);
+        assert_eq!(trajectory.next().unwrap().positions[0][0], 2.0);
+        assert!(trajectory.next().is_none());
+        trajectory.rewind();
+        assert_eq!(trajectory.current_frame().unwrap().positions[0][0], 1.0);
     }
 }
