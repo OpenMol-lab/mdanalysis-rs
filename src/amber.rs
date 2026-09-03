@@ -1069,7 +1069,7 @@ impl CoordinateFile {
 
 fn parse_inpcrd(input: &str) -> Result<InpcrdFile, AmberError> {
     let mut lines = input.lines();
-    let title = lines.next().unwrap_or_default().trim_end().to_owned();
+    let title = lines.next().unwrap_or_default().trim().to_owned();
     let header = lines
         .next()
         .ok_or_else(|| parse_error("INPCRD", "missing atom-count line"))?;
@@ -1306,6 +1306,12 @@ mod tests {
     #[test]
     fn inpcrd_rejects_nonfinite_time() {
         assert!(InpcrdFile::from_str("title\n    1 NaN\n 1.0 2.0 3.0\n").is_err());
+    }
+
+    #[test]
+    fn inpcrd_trims_title_whitespace() {
+        let file = InpcrdFile::from_str("  title with padding  \n    1\n 1.0 2.0 3.0\n").unwrap();
+        assert_eq!(file.title, "title with padding");
     }
 
     #[test]
