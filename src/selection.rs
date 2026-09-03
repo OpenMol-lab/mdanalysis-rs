@@ -22,6 +22,12 @@ pub trait AtomLike {
     /// Segment identifier.
     fn segid(&self) -> &str;
 
+    /// Optional insertion code used to distinguish PDB residues that share a
+    /// numeric residue identifier.
+    fn insertion_code(&self) -> Option<char> {
+        None
+    }
+
     /// Force-field atom type, when available.
     fn atom_type(&self) -> Option<&str> {
         None
@@ -425,6 +431,7 @@ impl Expr {
                 selection.matches_with_context(reference, atoms, bonds, groups, global_atoms)
                     && reference.resid() == atom.resid()
                     && reference.segid() == atom.segid()
+                    && reference.insertion_code() == atom.insertion_code()
             }),
             Self::Global(selection) => {
                 selection.matches_with_context(atom, atoms, bonds, groups, global_atoms)
@@ -656,7 +663,11 @@ impl SameProperty {
                 (atom.position()[axis] - reference.position()[axis]).abs() <= 1.0e-6
             }
             Self::Resid => atom.resid() == reference.resid(),
-            Self::Residue => atom.resid() == reference.resid() && atom.segid() == reference.segid(),
+            Self::Residue => {
+                atom.resid() == reference.resid()
+                    && atom.segid() == reference.segid()
+                    && atom.insertion_code() == reference.insertion_code()
+            }
             Self::Resname => atom.resname() == reference.resname(),
             Self::Name => atom.name() == reference.name(),
             Self::Element => atom.element() == reference.element(),

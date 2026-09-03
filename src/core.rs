@@ -30,6 +30,9 @@ pub struct Atom {
     pub segid: String,
     pub segment_index: usize,
     pub chain_id: String,
+    /// Optional PDB insertion code distinguishing residues with the same
+    /// numeric identifier.
+    pub insertion_code: Option<char>,
     pub position: [f64; 3],
     pub velocity: Option<[f64; 3]>,
     pub force: Option<[f64; 3]>,
@@ -52,6 +55,7 @@ impl Atom {
             segid: "SYSTEM".to_string(),
             segment_index: 0,
             chain_id: String::new(),
+            insertion_code: None,
             position,
             velocity: None,
             force: None,
@@ -88,6 +92,9 @@ impl AtomLike for Atom {
     }
     fn chain_id(&self) -> &str {
         &self.chain_id
+    }
+    fn insertion_code(&self) -> Option<char> {
+        self.insertion_code
     }
     fn segid(&self) -> &str {
         &self.segid
@@ -128,6 +135,7 @@ impl From<PdbAtom> for Atom {
             },
             segment_index: 0,
             chain_id,
+            insertion_code: atom.insertion_code,
             position,
             velocity: None,
             force: None,
@@ -271,15 +279,15 @@ impl Topology {
     pub fn rebuild_hierarchy(&mut self) {
         self.residues.clear();
         self.segments.clear();
-        let mut residue_keys: Vec<(i32, String, usize, String)> = Vec::new();
+        let mut residue_keys: Vec<(i32, String, String, Option<char>)> = Vec::new();
         for atom_index in 0..self.atoms.len() {
             self.atoms[atom_index].index = atom_index;
             let atom = &self.atoms[atom_index];
             let key = (
                 atom.resid,
                 atom.resname.clone(),
-                atom.segment_index,
                 atom.segid.clone(),
+                atom.insertion_code,
             );
             let residue_index = residue_keys
                 .iter()
@@ -1387,7 +1395,7 @@ impl Universe {
                 residue_name: atom.resname.clone(),
                 chain_id: atom.chain_id.chars().next(),
                 residue_sequence: atom.resid,
-                insertion_code: None,
+                insertion_code: atom.insertion_code,
                 x: first_positions.get(index).unwrap_or(&atom.position)[0],
                 y: first_positions.get(index).unwrap_or(&atom.position)[1],
                 z: first_positions.get(index).unwrap_or(&atom.position)[2],
@@ -1468,7 +1476,7 @@ impl Universe {
                     residue_name: atom.resname.clone(),
                     chain_id: atom.chain_id.chars().next(),
                     residue_sequence: atom.resid,
-                    insertion_code: None,
+                    insertion_code: atom.insertion_code,
                     x: position[0],
                     y: position[1],
                     z: position[2],
@@ -1753,6 +1761,7 @@ fn atom_from_pdbqt(index: usize, source: PdbqtAtom) -> Atom {
         },
         segment_index: 0,
         chain_id,
+        insertion_code: source.insertion_code,
         position,
         velocity: None,
         force: None,
@@ -2069,6 +2078,46 @@ mod tests {
         let universe = Universe::from_pdb_str(pdb).unwrap();
         assert_eq!(universe.topology.atoms[0].element.as_deref(), Some("Cu"));
         assert!((universe.topology.atoms[0].mass - 63.546).abs() < 1e-6);
+    }
+
+    #[test]
+    fn pdb_insertion_codes_define_distinct_residues_and_round_trip() {
+        let pdb = concat!(
+            "ATOM      1  CA  GLY A   1      0.000   0.000   0.000  1.00  0.00           C  \n",
+            "ATOM      2  CA  GLY A   1A     1.000   0.000   0.000  1.00  0.00           C  \n",
+            "ATOM      3  CA  GLY A   1B     2.000   0.000   0.000  1.00  0.00           C  \n",
+            "END\n",
+        );
+        let universe = Universe::from_pdb_str(pdb).unwrap();
+        assert_eq!(universe.n_residues(), 3);
+        assert_eq!(universe.topology.atoms[1].insertion_code, Some('A'));
+        assert_eq!(
+            universe
+                .select_atoms("same residue as index 1")
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(
+            universe
+                .select_atoms("same resid as index 1")
+                .unwrap()
+                .len(),
+            3
+        );
+        let path = std::env::temp_dir().join(format!(
+            "mdanalysis-rs-pdb-icode-{}-{}.pdb",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        universe.write_pdb(&path).unwrap();
+        let reparsed = Universe::from_pdb(&path).unwrap();
+        let _ = std::fs::remove_file(path);
+        assert_eq!(reparsed.topology.atoms[2].insertion_code, Some('B'));
+        assert_eq!(reparsed.n_residues(), 3);
     }
 
     #[test]
