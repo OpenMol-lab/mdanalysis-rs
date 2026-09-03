@@ -276,6 +276,14 @@ where
     (start, end)
 }
 
+fn signed_index(length: usize, index: isize) -> Option<usize> {
+    if index < 0 {
+        length.checked_sub(index.unsigned_abs())
+    } else {
+        usize::try_from(index).ok()
+    }
+}
+
 impl Bond {
     pub fn new(atom1: usize, atom2: usize) -> Self {
         Self {
@@ -361,9 +369,22 @@ impl Topology {
         self.atoms.get(index)
     }
 
+    /// Return an atom by signed index, accepting Python-style negative values.
+    #[must_use]
+    pub fn atom_signed(&self, index: isize) -> Option<&Atom> {
+        let index = signed_index(self.atoms.len(), index)?;
+        self.atom(index)
+    }
+
     /// Return an atom by zero-based index for in-place modification.
     pub fn atom_mut(&mut self, index: usize) -> Option<&mut Atom> {
         self.atoms.get_mut(index)
+    }
+
+    /// Return an atom by signed index for in-place modification.
+    pub fn atom_signed_mut(&mut self, index: isize) -> Option<&mut Atom> {
+        let index = signed_index(self.atoms.len(), index)?;
+        self.atom_mut(index)
     }
 
     /// Return a bond by zero-based index.
@@ -372,9 +393,22 @@ impl Topology {
         self.bonds.get(index)
     }
 
+    /// Return a bond by signed index, accepting Python-style negative values.
+    #[must_use]
+    pub fn bond_signed(&self, index: isize) -> Option<&Bond> {
+        let index = signed_index(self.bonds.len(), index)?;
+        self.bond(index)
+    }
+
     /// Return a bond by zero-based index for in-place modification.
     pub fn bond_mut(&mut self, index: usize) -> Option<&mut Bond> {
         self.bonds.get_mut(index)
+    }
+
+    /// Return a bond by signed index for in-place modification.
+    pub fn bond_signed_mut(&mut self, index: isize) -> Option<&mut Bond> {
+        let index = signed_index(self.bonds.len(), index)?;
+        self.bond_mut(index)
     }
 
     pub fn rebuild_hierarchy(&mut self) {
@@ -433,9 +467,23 @@ impl Topology {
         self.residues.get(index)
     }
 
+    /// Return a residue by signed index, accepting Python-style negative
+    /// values.
+    #[must_use]
+    pub fn residue_signed(&self, index: isize) -> Option<&Residue> {
+        let index = signed_index(self.residues.len(), index)?;
+        self.residue(index)
+    }
+
     /// Return the residue at `index` for in-place modification.
     pub fn residue_mut(&mut self, index: usize) -> Option<&mut Residue> {
         self.residues.get_mut(index)
+    }
+
+    /// Return a residue by signed index for in-place modification.
+    pub fn residue_signed_mut(&mut self, index: isize) -> Option<&mut Residue> {
+        let index = signed_index(self.residues.len(), index)?;
+        self.residue_mut(index)
     }
 
     /// Return the segment at `index`, if it exists.
@@ -443,9 +491,23 @@ impl Topology {
         self.segments.get(index)
     }
 
+    /// Return a segment by signed index, accepting Python-style negative
+    /// values.
+    #[must_use]
+    pub fn segment_signed(&self, index: isize) -> Option<&Segment> {
+        let index = signed_index(self.segments.len(), index)?;
+        self.segment(index)
+    }
+
     /// Return the segment at `index` for in-place modification.
     pub fn segment_mut(&mut self, index: usize) -> Option<&mut Segment> {
         self.segments.get_mut(index)
+    }
+
+    /// Return a segment by signed index for in-place modification.
+    pub fn segment_signed_mut(&mut self, index: isize) -> Option<&mut Segment> {
+        let index = signed_index(self.segments.len(), index)?;
+        self.segment_mut(index)
     }
 
     /// Return all atoms belonging to the residue at `index`.
@@ -2086,6 +2148,80 @@ impl Universe {
         self.topology.residue(index)
     }
 
+    /// Return an atom metadata record at `index`, if it exists.
+    ///
+    /// This accesses the topology record.  Use [`Universe::atoms`] when the
+    /// selected trajectory frame's coordinates or vectors are required.
+    pub fn atom(&self, index: usize) -> Option<&Atom> {
+        self.topology.atom(index)
+    }
+
+    /// Return an atom metadata record by signed index.
+    pub fn atom_signed(&self, index: isize) -> Option<&Atom> {
+        self.topology.atom_signed(index)
+    }
+
+    /// Return an atom metadata record for in-place modification.
+    pub fn atom_mut(&mut self, index: usize) -> Option<&mut Atom> {
+        self.topology.atom_mut(index)
+    }
+
+    /// Return an atom metadata record by signed index for in-place
+    /// modification.
+    pub fn atom_signed_mut(&mut self, index: isize) -> Option<&mut Atom> {
+        self.topology.atom_signed_mut(index)
+    }
+
+    /// Return a bond at `index`, if it exists.
+    pub fn bond(&self, index: usize) -> Option<&Bond> {
+        self.topology.bond(index)
+    }
+
+    /// Return a bond by signed index.
+    pub fn bond_signed(&self, index: isize) -> Option<&Bond> {
+        self.topology.bond_signed(index)
+    }
+
+    /// Return a bond for in-place modification.
+    pub fn bond_mut(&mut self, index: usize) -> Option<&mut Bond> {
+        self.topology.bond_mut(index)
+    }
+
+    /// Return a bond by signed index for in-place modification.
+    pub fn bond_signed_mut(&mut self, index: isize) -> Option<&mut Bond> {
+        self.topology.bond_signed_mut(index)
+    }
+
+    /// Return a residue by signed index.
+    pub fn residue_signed(&self, index: isize) -> Option<&Residue> {
+        self.topology.residue_signed(index)
+    }
+
+    /// Return a residue for in-place modification.
+    pub fn residue_mut(&mut self, index: usize) -> Option<&mut Residue> {
+        self.topology.residue_mut(index)
+    }
+
+    /// Return a residue by signed index for in-place modification.
+    pub fn residue_signed_mut(&mut self, index: isize) -> Option<&mut Residue> {
+        self.topology.residue_signed_mut(index)
+    }
+
+    /// Return a segment by signed index.
+    pub fn segment_signed(&self, index: isize) -> Option<&Segment> {
+        self.topology.segment_signed(index)
+    }
+
+    /// Return a segment for in-place modification.
+    pub fn segment_mut(&mut self, index: usize) -> Option<&mut Segment> {
+        self.topology.segment_mut(index)
+    }
+
+    /// Return a segment by signed index for in-place modification.
+    pub fn segment_signed_mut(&mut self, index: isize) -> Option<&mut Segment> {
+        self.topology.segment_signed_mut(index)
+    }
+
     /// Return the segment metadata at `index`, if it exists.
     pub fn segment(&self, index: usize) -> Option<&Segment> {
         self.topology.segment(index)
@@ -2184,6 +2320,12 @@ impl Universe {
         self.topology.segments.len()
     }
 
+    /// Return the number of bonds in the topology.
+    #[must_use]
+    pub fn n_bonds(&self) -> usize {
+        self.topology.n_bonds()
+    }
+
     pub fn n_frames(&self) -> usize {
         self.trajectory.n_frames()
     }
@@ -2226,6 +2368,12 @@ impl Universe {
     #[must_use]
     pub fn current_frame_index(&self) -> Option<usize> {
         self.trajectory.current_index()
+    }
+
+    /// Alias for [`Universe::current_frame_index`].
+    #[must_use]
+    pub fn current_index(&self) -> Option<usize> {
+        self.current_frame_index()
     }
 
     /// Return the selected frame's simulation time.
@@ -2496,6 +2644,37 @@ mod tests {
         assert_eq!(group[0].name, "N2");
         assert_eq!(group[0..1].len(), 1);
         assert!(group.get_signed(-3).is_none());
+    }
+
+    #[test]
+    fn topology_signed_accessors_and_universe_delegates_follow_python_indices() {
+        let mut first = Atom::new(0, "N", [0.0, 0.0, 0.0]);
+        first.resid = 1;
+        first.resname = "ALA".into();
+        first.segid = "A".into();
+        let mut second = Atom::new(1, "CA", [1.0, 0.0, 0.0]);
+        second.resid = 1;
+        second.resname = "ALA".into();
+        second.segid = "A".into();
+        let mut universe = Universe::from_atoms(vec![first, second]);
+        universe.topology.add_bond(Bond::new(0, 1));
+
+        assert_eq!(universe.n_bonds(), 1);
+        assert_eq!(universe.atom_signed(-1).unwrap().name, "CA");
+        assert_eq!(universe.bond_signed(-1).unwrap().partner(1), Some(0));
+        assert_eq!(universe.residue_signed(-1).unwrap().name, "ALA");
+        assert_eq!(universe.segment_signed(-1).unwrap().id, "A");
+        assert!(universe.atom_signed(-3).is_none());
+        assert!(universe.bond_signed(-2).is_none());
+
+        universe.atom_signed_mut(-1).unwrap().name = "CAX".into();
+        universe.bond_signed_mut(-1).unwrap().order = Some(1);
+        universe.residue_signed_mut(-1).unwrap().name = "ALX".into();
+        universe.segment_signed_mut(-1).unwrap().id = "AX".into();
+        assert_eq!(universe.atom(1).unwrap().name, "CAX");
+        assert_eq!(universe.bond(0).unwrap().order, Some(1));
+        assert_eq!(universe.residue(0).unwrap().name, "ALX");
+        assert_eq!(universe.segment(0).unwrap().id, "AX");
     }
 
     #[test]
