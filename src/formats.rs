@@ -340,13 +340,14 @@ fn write_pqr_document<W: Write>(structure: &Structure, mut writer: W) -> Result<
     validate_atoms(structure, "PQR")?;
     for atom in &structure.atoms {
         let chain = atom.chain_id.as_deref().unwrap_or("");
+        let segment = atom.segment_id.as_deref().unwrap_or("");
         let charge = atom.charge.ok_or_else(|| {
             FormatError::InvalidStructure(format!("atom {} has no charge", atom.serial))
         })?;
         let radius = atom.radius.ok_or_else(|| {
             FormatError::InvalidStructure(format!("atom {} has no radius", atom.serial))
         })?;
-        if chain.is_empty() {
+        if chain.is_empty() && segment.is_empty() {
             writeln!(
                 writer,
                 "ATOM {:>5} {:<4} {:<4} {:>5} {:>10.5} {:>10.5} {:>10.5} {:>9.5} {:>8.5}",
@@ -360,7 +361,22 @@ fn write_pqr_document<W: Write>(structure: &Structure, mut writer: W) -> Result<
                 charge,
                 radius
             )?;
-        } else {
+        } else if chain.is_empty() {
+            writeln!(
+                writer,
+                "ATOM {:>5} {:<4} {:<4} {:>5} {:>10.5} {:>10.5} {:>10.5} {:>9.5} {:>8.5} {}",
+                atom.serial,
+                atom.name,
+                atom.residue_name,
+                atom.residue_id,
+                atom.x,
+                atom.y,
+                atom.z,
+                charge,
+                radius,
+                segment
+            )?;
+        } else if segment.is_empty() {
             writeln!(
                 writer,
                 "ATOM {:>5} {:<4} {:<4} {:<2} {:>5} {:>10.5} {:>10.5} {:>10.5} {:>9.5} {:>8.5}",
@@ -374,6 +390,22 @@ fn write_pqr_document<W: Write>(structure: &Structure, mut writer: W) -> Result<
                 atom.z,
                 charge,
                 radius
+            )?;
+        } else {
+            writeln!(
+                writer,
+                "ATOM {:>5} {:<4} {:<4} {:<2} {:>5} {:>10.5} {:>10.5} {:>10.5} {:>9.5} {:>8.5} {}",
+                atom.serial,
+                atom.name,
+                atom.residue_name,
+                chain,
+                atom.residue_id,
+                atom.x,
+                atom.y,
+                atom.z,
+                charge,
+                radius,
+                segment
             )?;
         }
     }

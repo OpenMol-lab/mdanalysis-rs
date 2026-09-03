@@ -25,6 +25,8 @@ pub struct Atom {
     pub element: Option<String>,
     pub mass: f64,
     pub charge: f64,
+    /// Optional atomic radius, used by formats such as PQR.
+    pub radius: Option<f64>,
     pub resid: i32,
     pub residue_index: usize,
     pub resname: String,
@@ -50,6 +52,7 @@ impl Atom {
             element: None,
             mass: 0.0,
             charge: 0.0,
+            radius: None,
             resid: 1,
             residue_index: 0,
             resname: "UNK".to_string(),
@@ -131,6 +134,7 @@ impl From<PdbAtom> for Atom {
             mass: element.as_deref().and_then(element_mass).unwrap_or(0.0),
             element,
             charge: 0.0,
+            radius: None,
             resid: atom.residue_sequence,
             residue_index: 0,
             resname: atom.residue_name,
@@ -1825,6 +1829,7 @@ impl Universe {
                 .unwrap_or_else(|| "SYSTEM".to_string());
             atom.chain_id = source.chain_id.clone().unwrap_or_default();
             atom.charge = source.charge.unwrap_or(0.0);
+            atom.radius = source.radius;
             atom.element = infer_element(source.atom_type.as_deref().unwrap_or(&source.name));
             atom.atom_type = source.atom_type.clone();
             atom.mass = atom
@@ -2087,6 +2092,124 @@ impl Universe {
             title: String::new(),
         }
         .write_file(path)?;
+        Ok(())
+    }
+
+    /// Write the currently selected coordinates and topology as a PQR file.
+    pub fn write_pqr(&self, path: impl AsRef<Path>) -> crate::Result<()> {
+        let positions = self.positions();
+        let structure = Structure {
+            atoms: self
+                .topology
+                .atoms
+                .iter()
+                .enumerate()
+                .map(|(index, atom)| {
+                    let position = positions.get(index).copied().unwrap_or(atom.position);
+                    crate::formats::FormatAtom {
+                        serial: index + 1,
+                        name: atom.name.clone(),
+                        atom_type: atom.atom_type.clone(),
+                        residue_name: atom.resname.clone(),
+                        residue_id: atom.resid,
+                        chain_id: (!atom.chain_id.is_empty()).then(|| atom.chain_id.clone()),
+                        segment_id: (!atom.segid.is_empty() && atom.segid != "SYSTEM")
+                            .then(|| atom.segid.clone()),
+                        x: position[0],
+                        y: position[1],
+                        z: position[2],
+                        charge: Some(atom.charge),
+                        radius: Some(atom.radius.unwrap_or(1.0)),
+                    }
+                })
+                .collect(),
+            title: String::new(),
+            bonds: Vec::new(),
+        };
+        crate::formats::write_pqr(path, &structure)?;
+        Ok(())
+    }
+
+    /// Write the currently selected coordinates and topology as a MOL2 file.
+    pub fn write_mol2(&self, path: impl AsRef<Path>) -> crate::Result<()> {
+        let positions = self.positions();
+        let atoms = self
+            .topology
+            .atoms
+            .iter()
+            .enumerate()
+            .map(|(index, atom)| {
+                let position = positions.get(index).copied().unwrap_or(atom.position);
+                crate::formats::FormatAtom {
+                    serial: index + 1,
+                    name: atom.name.clone(),
+                    atom_type: atom.atom_type.clone().or_else(|| atom.element.clone()),
+                    residue_name: atom.resname.clone(),
+                    residue_id: atom.resid,
+                    chain_id: None,
+                    segment_id: None,
+                    x: position[0],
+                    y: position[1],
+                    z: position[2],
+                    charge: Some(atom.charge),
+                    radius: None,
+                }
+            })
+            .collect();
+        let bonds = self
+            .topology
+            .bonds
+            .iter()
+            .enumerate()
+            .map(|(index, bond)| crate::formats::FormatBond {
+                serial: index + 1,
+                atom1: bond.atom1 + 1,
+                atom2: bond.atom2 + 1,
+                bond_type: bond
+                    .order
+                    .map_or_else(|| "1".to_owned(), |order| order.to_string()),
+            })
+            .collect();
+        let structure = Structure {
+            atoms,
+            bonds,
+            title: "mdanalysis-rs".to_owned(),
+        };
+        crate::formats::write_mol2(path, &structure)?;
+        Ok(())
+    }
+
+    /// Write the currently selected coordinates and topology as a CHARMM CRD file.
+    pub fn write_crd(&self, path: impl AsRef<Path>) -> crate::Result<()> {
+        let positions = self.positions();
+        let structure = Structure {
+            atoms: self
+                .topology
+                .atoms
+                .iter()
+                .enumerate()
+                .map(|(index, atom)| {
+                    let position = positions.get(index).copied().unwrap_or(atom.position);
+                    crate::formats::FormatAtom {
+                        serial: index + 1,
+                        name: atom.name.clone(),
+                        atom_type: atom.atom_type.clone(),
+                        residue_name: atom.resname.clone(),
+                        residue_id: atom.resid,
+                        chain_id: None,
+                        segment_id: (!atom.segid.is_empty()).then(|| atom.segid.clone()),
+                        x: position[0],
+                        y: position[1],
+                        z: position[2],
+                        charge: None,
+                        radius: None,
+                    }
+                })
+                .collect(),
+            bonds: Vec::new(),
+            title: "mdanalysis-rs".to_owned(),
+        };
+        crate::formats::write_crd(path, &structure)?;
         Ok(())
     }
 
@@ -2513,6 +2636,7 @@ fn atom_from_pdbqt(index: usize, source: PdbqtAtom) -> Atom {
         element,
         mass,
         charge: source.charge,
+        radius: None,
         resid: source.residue_sequence,
         residue_index: 0,
         resname: source.residue_name,
@@ -2828,6 +2952,100 @@ mod tests {
         assert_eq!(universe.topology.bonds[0].partner(0), Some(1));
         assert_eq!(universe.topology.bonds[0].order, Some(1));
         assert_eq!(universe.topology.atoms[0].atom_type.as_deref(), Some("O.2"));
+    }
+
+    #[test]
+    fn pqr_writer_round_trips_current_frame_charge_radius_and_segment() {
+        let input = concat!(
+            "ATOM      1  C1  LIG A   1       1.00000  2.00000  3.00000  0.20000  1.70000 SEG1\n",
+            "END\n",
+        );
+        let mut universe = Universe::from_pqr_str(input).expect("valid PQR");
+        universe
+            .add_frame(Frame::new(vec![[4.0, 5.0, 6.0]]))
+            .expect("matching frame atom count");
+        universe.set_frame(1).expect("second frame exists");
+        let output = std::env::temp_dir().join(format!(
+            "mdanalysis-rs-pqr-{}-{}.pqr",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock")
+                .as_nanos()
+        ));
+        universe.write_pqr(&output).expect("write PQR");
+        let reparsed = Universe::from_pqr(&output).expect("read written PQR");
+        let _ = std::fs::remove_file(output);
+
+        assert_eq!(reparsed.positions(), vec![[4.0, 5.0, 6.0]]);
+        assert_eq!(reparsed.topology.atoms[0].chain_id, "A");
+        assert_eq!(reparsed.topology.atoms[0].segid, "SEG1");
+        assert_eq!(reparsed.topology.atoms[0].charge, 0.2);
+        assert_eq!(reparsed.topology.atoms[0].radius, Some(1.7));
+    }
+
+    #[test]
+    fn mol2_writer_round_trips_current_frame_charges_atom_types_and_bonds() {
+        let input = concat!(
+            "@<TRIPOS>MOLECULE\n",
+            "water\n",
+            "2 1 0 0 0\n",
+            "SMALL\n",
+            "USER_CHARGES\n\n",
+            "@<TRIPOS>ATOM\n",
+            "1 O 0 0 0 O.2 1 HOH -0.8\n",
+            "2 H 1 0 0 H 1 HOH 0.4\n",
+            "@<TRIPOS>BOND\n",
+            "1 1 2 1\n",
+        );
+        let mut universe = Universe::from_mol2_str(input).expect("valid MOL2");
+        universe.positions_mut().expect("initial frame")[0] = [2.0, 3.0, 4.0];
+        let output = std::env::temp_dir().join(format!(
+            "mdanalysis-rs-mol2-{}-{}.mol2",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock")
+                .as_nanos()
+        ));
+        universe.write_mol2(&output).expect("write MOL2");
+        let reparsed = Universe::from_mol2(&output).expect("read written MOL2");
+        let _ = std::fs::remove_file(output);
+
+        assert_eq!(reparsed.positions()[0], [2.0, 3.0, 4.0]);
+        assert_eq!(reparsed.topology.atoms[0].atom_type.as_deref(), Some("O.2"));
+        assert_eq!(reparsed.topology.atoms[0].charge, -0.8);
+        assert_eq!(reparsed.topology.bonds.len(), 1);
+        assert_eq!(reparsed.topology.bonds[0].atom1, 0);
+        assert_eq!(reparsed.topology.bonds[0].atom2, 1);
+        assert_eq!(reparsed.topology.bonds[0].order, Some(1));
+    }
+
+    #[test]
+    fn crd_writer_round_trips_current_coordinates_and_segment() {
+        let input = concat!(
+            "* coordinates\n",
+            "    2\n",
+            "    1 SEG1 7 ALA N 1.0 2.0 3.0\n",
+            "    2 SEG1 7 ALA CA 2.0 3.0 4.0\n",
+        );
+        let universe = Universe::from_crd_str(input).expect("valid CRD");
+        let output = std::env::temp_dir().join(format!(
+            "mdanalysis-rs-crd-{}-{}.crd",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock")
+                .as_nanos()
+        ));
+        universe.write_crd(&output).expect("write CRD");
+        let reparsed = Universe::from_crd(&output).expect("read written CRD");
+        let _ = std::fs::remove_file(output);
+
+        assert_eq!(reparsed.positions(), universe.positions());
+        assert_eq!(reparsed.topology.atoms[0].resid, 7);
+        assert_eq!(reparsed.topology.atoms[0].resname, "ALA");
+        assert_eq!(reparsed.topology.atoms[0].segid, "SEG1");
     }
 
     #[test]
