@@ -10,6 +10,7 @@
 use std::fmt;
 use std::fs::File;
 use std::io::{self, BufReader, Read, Write};
+use std::ops::{Bound, Index, IndexMut, RangeBounds};
 use std::path::Path;
 
 /// A single coordinate frame.
@@ -64,6 +65,75 @@ impl CoordinateFrame {
         self.positions.len()
     }
 
+    /// Alias for [`Self::n_atoms`] that matches slice-like containers.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.positions.len()
+    }
+
+    /// Return whether this frame contains no coordinates.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.positions.is_empty()
+    }
+
+    /// Return one atom coordinate by zero-based index.
+    #[must_use]
+    pub fn get(&self, index: usize) -> Option<&[f64; 3]> {
+        self.positions.get(index)
+    }
+
+    /// Iterate over atom coordinates in file order.
+    pub fn iter(&self) -> std::slice::Iter<'_, [f64; 3]> {
+        self.positions.iter()
+    }
+
+    /// Mutably iterate over atom coordinates in file order.
+    pub fn iter_mut(&mut self) -> std::slice::IterMut<'_, [f64; 3]> {
+        self.positions.iter_mut()
+    }
+
+    /// Return a coordinate subset while retaining frame-level metadata.
+    ///
+    /// Per-atom metadata is sliced when it is populated consistently with the
+    /// coordinates; intentionally empty metadata remains empty.  As with
+    /// vector indexing, an out-of-bounds range panics.
+    #[must_use]
+    pub fn slice<R>(&self, range: R) -> Self
+    where
+        R: RangeBounds<usize>,
+    {
+        let start = match range.start_bound() {
+            Bound::Included(&value) => value,
+            Bound::Excluded(&value) => value.checked_add(1).expect("slice start overflow"),
+            Bound::Unbounded => 0,
+        };
+        let end = match range.end_bound() {
+            Bound::Included(&value) => value.checked_add(1).expect("slice end overflow"),
+            Bound::Excluded(&value) => value,
+            Bound::Unbounded => self.positions.len(),
+        };
+        let positions = self.positions[start..end].to_vec();
+        Self {
+            positions,
+            velocities: self.velocities.as_ref().map(|values| {
+                if values.is_empty() || values.len() != self.positions.len() {
+                    Vec::new()
+                } else {
+                    values[start..end].to_vec()
+                }
+            }),
+            dimensions: self.dimensions,
+            names: slice_metadata(&self.names, start, end, self.positions.len()),
+            residue_names: slice_metadata(&self.residue_names, start, end, self.positions.len()),
+            residue_ids: slice_metadata(&self.residue_ids, start, end, self.positions.len()),
+            atom_ids: slice_metadata(&self.atom_ids, start, end, self.positions.len()),
+            title: self.title.clone(),
+            step: self.step,
+            time: self.time,
+        }
+    }
+
     /// Return whether all per-atom metadata arrays have the frame's length.
     #[must_use]
     pub fn metadata_is_consistent(&self) -> bool {
@@ -86,6 +156,14 @@ trait OptionalVecLength {
 impl<T> OptionalVecLength for Vec<T> {
     fn is_empty_or_len(&self, length: usize) -> bool {
         self.is_empty() || self.len() == length
+    }
+}
+
+fn slice_metadata<T: Clone>(values: &[T], start: usize, end: usize, total: usize) -> Vec<T> {
+    if values.is_empty() || values.len() != total {
+        Vec::new()
+    } else {
+        values[start..end].to_vec()
     }
 }
 
@@ -223,6 +301,61 @@ impl std::ops::Index<usize> for CoordinateFile {
 
     fn index(&self, index: usize) -> &Self::Output {
         &self.frames[index]
+    }
+}
+
+impl Index<usize> for CoordinateFrame {
+    type Output = [f64; 3];
+
+    fn index(&self, index: usize) -> &Self::Output {
+        &self.positions[index]
+    }
+}
+
+impl IndexMut<usize> for CoordinateFrame {
+    fn index_mut(&mut self, index: usize) -> &mut Self::Output {
+        &mut self.positions[index]
+    }
+}
+
+impl std::ops::Deref for CoordinateFrame {
+    type Target = [[f64; 3]];
+
+    fn deref(&self) -> &Self::Target {
+        &self.positions
+    }
+}
+
+impl std::ops::DerefMut for CoordinateFrame {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.positions
+    }
+}
+
+impl<'a> IntoIterator for &'a CoordinateFrame {
+    type Item = &'a [f64; 3];
+    type IntoIter = std::slice::Iter<'a, [f64; 3]>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.positions.iter()
+    }
+}
+
+impl<'a> IntoIterator for &'a mut CoordinateFrame {
+    type Item = &'a mut [f64; 3];
+    type IntoIter = std::slice::IterMut<'a, [f64; 3]>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.positions.iter_mut()
+    }
+}
+
+impl IntoIterator for CoordinateFrame {
+    type Item = [f64; 3];
+    type IntoIter = std::vec::IntoIter<[f64; 3]>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.positions.into_iter()
     }
 }
 
@@ -990,5 +1123,55 @@ mod tests {
         file[1].positions[0][0] = 3.0;
         assert_eq!(file.iter().count(), 2);
         assert_eq!(file.into_iter().count(), 2);
+    }
+
+    #[test]
+    fn coordinate_frame_supports_collection_access_and_metadata_preserving_slice() {
+        let mut frame =
+            CoordinateFrame::new(vec![[0.0, 1.0, 2.0], [3.0, 4.0, 5.0], [6.0, 7.0, 8.0]]);
+        frame.velocities = Some(vec![
+            [10.0, 11.0, 12.0],
+            [13.0, 14.0, 15.0],
+            [16.0, 17.0, 18.0],
+        ]);
+        frame.names = vec!["A".into(), "B".into(), "C".into()];
+        frame.residue_names = vec!["RA".into(), "RB".into(), "RC".into()];
+        frame.residue_ids = vec![1, 2, 3];
+        frame.atom_ids = vec![7, 8, 9];
+        frame.title = "example".into();
+        frame.step = 42;
+        frame.time = 2.5;
+
+        assert_eq!(frame.len(), 3);
+        assert!(!frame.is_empty());
+        assert_eq!(frame.get(1), Some(&[3.0, 4.0, 5.0]));
+        assert_eq!(frame[2], [6.0, 7.0, 8.0]);
+        frame[0] = [-1.0, -2.0, -3.0];
+        assert_eq!(frame.positions[0], [-1.0, -2.0, -3.0]);
+
+        let sliced = frame.slice(1..=2);
+        assert_eq!(sliced.positions, vec![[3.0, 4.0, 5.0], [6.0, 7.0, 8.0]]);
+        assert_eq!(
+            sliced.velocities,
+            Some(vec![[13.0, 14.0, 15.0], [16.0, 17.0, 18.0]])
+        );
+        assert_eq!(sliced.names, vec!["B", "C"]);
+        assert_eq!(sliced.residue_names, vec!["RB", "RC"]);
+        assert_eq!(sliced.residue_ids, vec![2, 3]);
+        assert_eq!(sliced.atom_ids, vec![8, 9]);
+        assert_eq!(sliced.title, "example");
+        assert_eq!(sliced.step, 42);
+        assert_eq!(sliced.time, 2.5);
+    }
+
+    #[test]
+    fn coordinate_frame_slice_keeps_unspecified_metadata_empty() {
+        let mut frame = CoordinateFrame::new(vec![[0.0, 0.0, 0.0], [1.0, 1.0, 1.0]]);
+        frame.names.clear();
+        frame.velocities = None;
+        let sliced = frame.slice(..1);
+        assert!(sliced.metadata_is_consistent());
+        assert!(sliced.names.is_empty());
+        assert_eq!(sliced.velocities, None);
     }
 }
