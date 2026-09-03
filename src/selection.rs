@@ -923,6 +923,23 @@ impl<'a> Lexer<'a> {
                 })?;
             Ok(Token::Float(FloatValue(number), position))
         } else {
+            // Segment and other string identifiers may begin with a digit
+            // (for example, the PDB segment ID `4AKE`). Keep a mixed
+            // alphanumeric token together instead of splitting it into a
+            // number followed by an identifier. A dash remains a range
+            // separator for numeric predicates.
+            if self.chars.clone().next().is_some_and(|(_, character)| {
+                !character.is_ascii_digit() && character != '-' && is_identifier_continue(character)
+            }) {
+                while let Some((_, character)) = self.chars.clone().next() {
+                    if character == '-' || !is_identifier_continue(character) {
+                        break;
+                    }
+                    value.push(character);
+                    self.chars.next();
+                }
+                return Ok(Token::Ident(value, position));
+            }
             let number = value
                 .parse::<i64>()
                 .map_err(|_| SelectionError::InvalidValue {
@@ -1565,6 +1582,23 @@ mod tests {
         assert_eq!(select(&atoms, "name C*").unwrap().len(), 2);
         assert_eq!(select(&atoms, "name C[AB]").unwrap().len(), 2);
         assert_eq!(select(&atoms, "name C[!A]").unwrap().len(), 1);
+    }
+
+    #[test]
+    fn digit_prefixed_identifiers_are_single_selection_values() {
+        let atom = TestAtom {
+            name: "CA",
+            resname: "ALA",
+            resid: 1,
+            index: 0,
+            element: Some("C"),
+            atom_type: Some("CT1"),
+            chain_id: "A",
+            segid: "4AKE",
+            position: [0.0, 0.0, 0.0],
+        };
+        let selection = Selection::parse("segid 4AKE").unwrap();
+        assert_eq!(selection.apply(&[atom]).len(), 1);
     }
 
     #[test]

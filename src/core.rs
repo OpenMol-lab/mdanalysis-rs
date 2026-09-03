@@ -118,6 +118,11 @@ impl From<PdbAtom> for Atom {
         let element = atom.element.clone().or_else(|| infer_element(&atom.name));
         let position = atom.position();
         let chain_id = atom.chain_id.map(|id| id.to_string()).unwrap_or_default();
+        let segid = atom
+            .segid
+            .clone()
+            .or_else(|| (!chain_id.is_empty()).then(|| chain_id.clone()))
+            .unwrap_or_else(|| "SYSTEM".to_owned());
         Self {
             index: atom.serial.saturating_sub(1) as usize,
             name: atom.name,
@@ -128,11 +133,7 @@ impl From<PdbAtom> for Atom {
             resid: atom.residue_sequence,
             residue_index: 0,
             resname: atom.residue_name,
-            segid: if chain_id.is_empty() {
-                "SYSTEM".to_string()
-            } else {
-                chain_id.clone()
-            },
+            segid,
             segment_index: 0,
             chain_id,
             insertion_code: atom.insertion_code,
@@ -1394,6 +1395,7 @@ impl Universe {
                 alt_loc: None,
                 residue_name: atom.resname.clone(),
                 chain_id: atom.chain_id.chars().next(),
+                segid: (!atom.segid.is_empty()).then(|| atom.segid.clone()),
                 residue_sequence: atom.resid,
                 insertion_code: atom.insertion_code,
                 x: first_positions.get(index).unwrap_or(&atom.position)[0],
@@ -2118,6 +2120,36 @@ mod tests {
         let _ = std::fs::remove_file(path);
         assert_eq!(reparsed.topology.atoms[2].insertion_code, Some('B'));
         assert_eq!(reparsed.n_residues(), 3);
+    }
+
+    #[test]
+    fn pdb_segment_ids_are_preserved_for_selection_and_round_trip() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../mdanalysis/testsuite/MDAnalysisTests/data/adk_open.pdb");
+        let universe = Universe::from_pdb(&path).expect("valid PDB fixture");
+        assert_eq!(universe.topology.atoms[0].segid, "4AKE");
+        assert_eq!(universe.topology.atoms[0].chain_id, "");
+        assert_eq!(
+            universe.select_atoms("segid 4AKE").unwrap().len(),
+            universe.n_atoms()
+        );
+
+        let output = std::env::temp_dir().join(format!(
+            "mdanalysis-rs-pdb-segid-{}-{}.pdb",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        universe.write_pdb(&output).expect("write PDB");
+        let reparsed = Universe::from_pdb(&output).expect("read written PDB");
+        let _ = std::fs::remove_file(output);
+        assert_eq!(reparsed.topology.atoms[0].segid, "4AKE");
+        assert_eq!(
+            reparsed.select_atoms("segid 4AKE").unwrap().len(),
+            reparsed.n_atoms()
+        );
     }
 
     #[test]

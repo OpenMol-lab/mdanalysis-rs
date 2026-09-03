@@ -22,6 +22,8 @@ pub struct PdbAtom {
     pub alt_loc: Option<char>,
     pub residue_name: String,
     pub chain_id: Option<char>,
+    /// Optional segment identifier stored in columns 73-76.
+    pub segid: Option<String>,
     pub residue_sequence: i32,
     pub insertion_code: Option<char>,
     pub x: f64,
@@ -405,6 +407,7 @@ fn parse_atom(
         alt_loc: nonblank_char(field(line, 16, 17)),
         residue_name,
         chain_id: nonblank_char(field(line, 21, 22)),
+        segid: nonempty_string(field(line, 72, 76)),
         residue_sequence,
         insertion_code: nonblank_char(field(line, 26, 27)),
         x,
@@ -669,6 +672,10 @@ fn format_atom(atom: &PdbAtom) -> String {
     let atom_name = format_atom_name(atom);
     let residue_name = fit_field(&atom.residue_name, 3, true);
     let chain_id = atom.chain_id.unwrap_or(' ');
+    let segid = atom
+        .segid
+        .as_deref()
+        .map_or_else(|| "    ".to_owned(), |value| fit_field(value, 4, false));
     let alt_loc = atom.alt_loc.unwrap_or(' ');
     let insertion_code = atom.insertion_code.unwrap_or(' ');
     let occupancy = atom
@@ -687,7 +694,7 @@ fn format_atom(atom: &PdbAtom) -> String {
         .map_or_else(|| "  ".to_string(), |value| fit_field(value, 2, true));
 
     format!(
-        "{record}{:>5} {atom_name}{alt_loc}{residue_name} {chain_id}{:>4}{insertion_code}   {:>8.3}{:>8.3}{:>8.3}{occupancy}{temperature_factor}          {element}{charge}",
+        "{record}{:>5} {atom_name}{alt_loc}{residue_name} {chain_id}{:>4}{insertion_code}   {:>8.3}{:>8.3}{:>8.3}{occupancy}{temperature_factor}      {segid}{element}{charge}",
         atom.serial, atom.residue_sequence, atom.x, atom.y, atom.z
     )
 }
