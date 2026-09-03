@@ -13,7 +13,7 @@ use crate::selection::{
 };
 use crate::xdr::{TrrFile, XtcFile, read_trr, read_xtc};
 use std::collections::BTreeMap;
-use std::ops::{Bound, Deref, DerefMut, Index, IndexMut, RangeBounds};
+use std::ops::{Bound, Deref, DerefMut, RangeBounds};
 use std::path::Path;
 
 /// A single atom and its topology metadata.
@@ -196,6 +196,24 @@ impl Residue {
             atom_indices: Vec::new(),
         }
     }
+
+    /// Number of atoms belonging to this residue.
+    #[must_use]
+    pub fn n_atoms(&self) -> usize {
+        self.atom_indices.len()
+    }
+
+    /// Alias for [`Residue::n_atoms`] matching collection terminology.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.n_atoms()
+    }
+
+    /// Return whether this residue contains no atoms.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.atom_indices.is_empty()
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -212,6 +230,24 @@ impl Segment {
             id: id.into(),
             residue_indices: Vec::new(),
         }
+    }
+
+    /// Number of residues belonging to this segment.
+    #[must_use]
+    pub fn n_residues(&self) -> usize {
+        self.residue_indices.len()
+    }
+
+    /// Alias for [`Segment::n_residues`] matching collection terminology.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.n_residues()
+    }
+
+    /// Return whether this segment contains no residues.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.residue_indices.is_empty()
     }
 }
 
@@ -295,6 +331,52 @@ impl Topology {
         }
     }
 
+    /// Number of atoms in this topology.
+    #[must_use]
+    pub fn n_atoms(&self) -> usize {
+        self.atoms.len()
+    }
+
+    /// Number of residues in this topology.
+    #[must_use]
+    pub fn n_residues(&self) -> usize {
+        self.residues.len()
+    }
+
+    /// Number of segments in this topology.
+    #[must_use]
+    pub fn n_segments(&self) -> usize {
+        self.segments.len()
+    }
+
+    /// Number of bonds in this topology.
+    #[must_use]
+    pub fn n_bonds(&self) -> usize {
+        self.bonds.len()
+    }
+
+    /// Return an atom by zero-based index.
+    #[must_use]
+    pub fn atom(&self, index: usize) -> Option<&Atom> {
+        self.atoms.get(index)
+    }
+
+    /// Return an atom by zero-based index for in-place modification.
+    pub fn atom_mut(&mut self, index: usize) -> Option<&mut Atom> {
+        self.atoms.get_mut(index)
+    }
+
+    /// Return a bond by zero-based index.
+    #[must_use]
+    pub fn bond(&self, index: usize) -> Option<&Bond> {
+        self.bonds.get(index)
+    }
+
+    /// Return a bond by zero-based index for in-place modification.
+    pub fn bond_mut(&mut self, index: usize) -> Option<&mut Bond> {
+        self.bonds.get_mut(index)
+    }
+
     pub fn rebuild_hierarchy(&mut self) {
         self.residues.clear();
         self.segments.clear();
@@ -351,9 +433,19 @@ impl Topology {
         self.residues.get(index)
     }
 
+    /// Return the residue at `index` for in-place modification.
+    pub fn residue_mut(&mut self, index: usize) -> Option<&mut Residue> {
+        self.residues.get_mut(index)
+    }
+
     /// Return the segment at `index`, if it exists.
     pub fn segment(&self, index: usize) -> Option<&Segment> {
         self.segments.get(index)
+    }
+
+    /// Return the segment at `index` for in-place modification.
+    pub fn segment_mut(&mut self, index: usize) -> Option<&mut Segment> {
+        self.segments.get_mut(index)
     }
 
     /// Return all atoms belonging to the residue at `index`.
@@ -965,6 +1057,27 @@ impl AtomGroup {
         self.atoms.get_mut(index)
     }
 
+    /// Return an atom by signed index, accepting Python-style negative values.
+    #[must_use]
+    pub fn get_signed(&self, index: isize) -> Option<&Atom> {
+        let index = if index < 0 {
+            self.atoms.len().checked_sub(index.unsigned_abs())?
+        } else {
+            usize::try_from(index).ok()?
+        };
+        self.get(index)
+    }
+
+    /// Return an atom by signed index for in-place modification.
+    pub fn get_signed_mut(&mut self, index: isize) -> Option<&mut Atom> {
+        let index = if index < 0 {
+            self.atoms.len().checked_sub(index.unsigned_abs())?
+        } else {
+            usize::try_from(index).ok()?
+        };
+        self.get_mut(index)
+    }
+
     pub fn iter(&self) -> std::slice::Iter<'_, Atom> {
         self.atoms.iter()
     }
@@ -982,17 +1095,17 @@ impl AtomGroup {
     }
 }
 
-impl Index<usize> for AtomGroup {
-    type Output = Atom;
+impl Deref for AtomGroup {
+    type Target = [Atom];
 
-    fn index(&self, index: usize) -> &Self::Output {
-        &self.atoms[index]
+    fn deref(&self) -> &Self::Target {
+        &self.atoms
     }
 }
 
-impl IndexMut<usize> for AtomGroup {
-    fn index_mut(&mut self, index: usize) -> &mut Self::Output {
-        &mut self.atoms[index]
+impl DerefMut for AtomGroup {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.atoms
     }
 }
 
@@ -2346,6 +2459,43 @@ mod tests {
             universe.atoms_for_segment(0).unwrap().positions(),
             vec![[10.0, 0.0, 0.0], [11.0, 0.0, 0.0], [12.0, 0.0, 0.0]]
         );
+    }
+
+    #[test]
+    fn topology_and_atom_groups_expose_safe_collection_accessors() {
+        let mut first = Atom::new(0, "N", [0.0, 0.0, 0.0]);
+        first.resid = 1;
+        first.resname = "ALA".into();
+        first.segid = "A".into();
+        let mut second = Atom::new(1, "CA", [1.0, 0.0, 0.0]);
+        second.resid = 1;
+        second.resname = "ALA".into();
+        second.segid = "A".into();
+        let topology = Topology::new(vec![first, second]);
+
+        assert_eq!(topology.n_atoms(), 2);
+        assert_eq!(topology.n_residues(), 1);
+        assert_eq!(topology.n_segments(), 1);
+        assert_eq!(topology.n_bonds(), 0);
+        assert_eq!(topology.atom(1).unwrap().name, "CA");
+        assert!(topology.atom(2).is_none());
+        assert_eq!(topology.residue(0).unwrap().len(), 2);
+        assert_eq!(topology.segment(0).unwrap().len(), 1);
+
+        let mut editable = topology.clone();
+        editable.atom_mut(0).unwrap().name = "NX".into();
+        assert_eq!(editable.atom(0).unwrap().name, "NX");
+        editable.add_bond(Bond::new(0, 1));
+        assert_eq!(editable.n_bonds(), 1);
+        assert_eq!(editable.bond(0).unwrap().partner(0), Some(1));
+        editable.bond_mut(0).unwrap().order = Some(1);
+        assert_eq!(editable.bond(0).unwrap().order, Some(1));
+        let mut group = AtomGroup::new(editable.atoms.clone());
+        assert_eq!(group.get_signed(-1).unwrap().name, "CA");
+        group.get_signed_mut(-2).unwrap().name = "N2".into();
+        assert_eq!(group[0].name, "N2");
+        assert_eq!(group[0..1].len(), 1);
+        assert!(group.get_signed(-3).is_none());
     }
 
     #[test]
