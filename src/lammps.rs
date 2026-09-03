@@ -5,7 +5,6 @@
 //! focuses on the fields needed to construct an MD trajectory while retaining
 //! non-contiguous atom IDs and restricted-triclinic box bounds.
 
-use flate2::read::GzDecoder;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
 use std::fs::File;
@@ -162,7 +161,8 @@ impl LammpsData {
 
     /// Read a DATA document from a filesystem path.
     pub fn read_file<P: AsRef<Path>>(path: P) -> Result<Self, LammpsError> {
-        Self::read(File::open(path)?)
+        let input = crate::io_utils::read_text_file(path.as_ref())?;
+        Self::from_str(&input)
     }
 
     /// Serialize this file using the stored atom-style description.
@@ -458,8 +458,8 @@ impl LammpsDumpFile {
         Self::from_str_with_options(&input, options)
     }
 
-    /// Read a LAMMPS dump from a path. Files ending in `.gz` are decompressed
-    /// on the fly; other paths are interpreted as plain text.
+    /// Read a LAMMPS dump from a path, transparently decoding gzip and bzip2
+    /// streams based on their file signatures.
     pub fn read_file<P: AsRef<Path>>(path: P) -> Result<Self, LammpsError> {
         Self::read_file_with_options(path, LammpsDumpOptions::default())
     }
@@ -470,16 +470,8 @@ impl LammpsDumpFile {
         options: LammpsDumpOptions,
     ) -> Result<Self, LammpsError> {
         let path = path.as_ref();
-        let file = File::open(path)?;
-        if path
-            .extension()
-            .and_then(|extension| extension.to_str())
-            .is_some_and(|extension| extension.eq_ignore_ascii_case("gz"))
-        {
-            Self::read_with_options(GzDecoder::new(file), options)
-        } else {
-            Self::read_with_options(file, options)
-        }
+        let input = crate::io_utils::read_text_file(path)?;
+        Self::from_str_with_options(&input, options)
     }
 
     #[must_use]

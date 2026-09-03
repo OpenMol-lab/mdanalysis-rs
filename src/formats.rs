@@ -229,7 +229,7 @@ impl From<io::Error> for FormatError {
 
 /// Read a PQR structure from a filesystem path.
 pub fn read_pqr<P: AsRef<Path>>(path: P) -> Result<Structure, FormatError> {
-    Structure::read_pqr(File::open(path)?)
+    Structure::from_pqr_str(&crate::io_utils::read_text_file(path.as_ref())?)
 }
 
 /// Write a PQR structure to a filesystem path.
@@ -239,7 +239,7 @@ pub fn write_pqr<P: AsRef<Path>>(path: P, structure: &Structure) -> Result<(), F
 
 /// Read a MOL2 structure from a filesystem path.
 pub fn read_mol2<P: AsRef<Path>>(path: P) -> Result<Structure, FormatError> {
-    Structure::read_mol2(File::open(path)?)
+    Structure::from_mol2_str(&crate::io_utils::read_text_file(path.as_ref())?)
 }
 
 /// Write a MOL2 structure to a filesystem path.
@@ -249,7 +249,7 @@ pub fn write_mol2<P: AsRef<Path>>(path: P, structure: &Structure) -> Result<(), 
 
 /// Read a CRD/CARD structure from a filesystem path.
 pub fn read_crd<P: AsRef<Path>>(path: P) -> Result<Structure, FormatError> {
-    Structure::read_crd(File::open(path)?)
+    Structure::from_crd_str(&crate::io_utils::read_text_file(path.as_ref())?)
 }
 
 /// Write a CRD/CARD structure to a filesystem path.

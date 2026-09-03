@@ -2,8 +2,9 @@
 //!
 //! TPR is a versioned XDR format whose layout changes with GROMACS releases.
 //! Parsing is delegated to [`minitpr`], which supports TPX versions 103 and
-//! newer (GROMACS 5.1+).  Legacy GROMACS files from the v58, v73, v83, and v100
-//! formats are parsed by the compatibility reader in this module.
+//! newer (GROMACS 5.1+).  The compatibility reader in this module handles
+//! older supported formats and recovers newer files that `minitpr` cannot
+//! parse safely.
 
 use crate::coordinates::{CoordinateFile, CoordinateFrame};
 use crate::core::{Atom, Bond, Frame, Topology, Trajectory, Universe};
@@ -12,6 +13,7 @@ use std::convert::TryFrom;
 use std::fmt;
 use std::fs::File;
 use std::io::{self, Read, Write};
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
 
 /// Header metadata from a parsed TPR file.
@@ -46,13 +48,16 @@ impl TprFile {
     /// Parse a TPR file from a filesystem path.
     pub fn read_file(path: impl AsRef<Path>) -> Result<Self, TprError> {
         let path = path.as_ref();
-        match minitpr::TprFile::parse(path) {
-            Ok(parsed) => Ok(Self::from_minitpr(parsed)),
-            Err(minitpr::errors::ParseTprError::UnsupportedVersion(58 | 73 | 83 | 100)) => {
+        match parse_minitpr(path) {
+            MinitprAttempt::Success(parsed) => Ok(Self::from_minitpr(*parsed)),
+            MinitprAttempt::Failure(minitpr::errors::ParseTprError::UnsupportedVersion(
+                58 | 73 | 83 | 100,
+            ))
+            | MinitprAttempt::Panicked => {
                 let bytes = std::fs::read(path)?;
                 parse_legacy(&bytes).map(Self::from_minitpr)
             }
-            Err(error) => Err(TprError::from(error)),
+            MinitprAttempt::Failure(error) => Err(TprError::from(error)),
         }
     }
 
@@ -80,15 +85,20 @@ impl TprFile {
             return parse_legacy(bytes).map(Self::from_minitpr);
         }
         let path = temporary_path();
-        let parsed = (|| -> Result<minitpr::TprFile, TprError> {
+        let parsed = (|| -> Result<_, TprError> {
             {
                 let mut file = File::create(&path)?;
                 file.write_all(bytes)?;
             }
-            minitpr::TprFile::parse(&path).map_err(TprError::from)
+            Ok(parse_minitpr(&path))
         })();
         let _ = std::fs::remove_file(&path);
-        parsed.map(Self::from_minitpr)
+        match parsed {
+            Ok(MinitprAttempt::Success(parsed)) => Ok(Self::from_minitpr(*parsed)),
+            Ok(MinitprAttempt::Failure(error)) => Err(TprError::from(error)),
+            Ok(MinitprAttempt::Panicked) => parse_legacy(bytes).map(Self::from_minitpr),
+            Err(error) => Err(error),
+        }
     }
 
     /// Number of atoms in the topology.
@@ -301,6 +311,20 @@ fn detect_version(bytes: &[u8]) -> Result<Option<i32>, TprError> {
     )))
 }
 
+enum MinitprAttempt {
+    Success(Box<minitpr::TprFile>),
+    Failure(minitpr::errors::ParseTprError),
+    Panicked,
+}
+
+fn parse_minitpr(path: &Path) -> MinitprAttempt {
+    match catch_unwind(AssertUnwindSafe(|| minitpr::TprFile::parse(path))) {
+        Ok(Ok(parsed)) => MinitprAttempt::Success(Box::new(parsed)),
+        Ok(Err(error)) => MinitprAttempt::Failure(error),
+        Err(_) => MinitprAttempt::Panicked,
+    }
+}
+
 fn parse_legacy(bytes: &[u8]) -> Result<minitpr::TprFile, TprError> {
     let mut reader = LegacyReader::new(bytes);
     let version_string = reader.string()?;
@@ -320,10 +344,11 @@ fn parse_legacy(bytes: &[u8]) -> Result<minitpr::TprFile, TprError> {
         }
     };
     let version = reader.i32()?;
-    if !matches!(version, 58 | 73 | 83 | 100) {
+    if version < 58 || version == 40 {
         return Err(TprError::UnsupportedVersion(version));
     }
     let generation = if version >= 26 { reader.i32()? } else { 0 };
+    let modern_body = version >= 119;
     if (77..=79).contains(&version) {
         reader.i32()?;
         reader.string()?;
@@ -357,6 +382,11 @@ fn parse_legacy(bytes: &[u8]) -> Result<minitpr::TprFile, TprError> {
         reader.i32()? != 0,
         reader.i32()? != 0,
     ];
+    let body_size = if modern_body && generation >= 27 {
+        Some(reader.i64()?)
+    } else {
+        None
+    };
     let header = minitpr::TprHeader {
         gromacs_version: version_string,
         precision,
@@ -373,7 +403,7 @@ fn parse_legacy(bytes: &[u8]) -> Result<minitpr::TprFile, TprError> {
         has_velocities: flags[3],
         has_forces: flags[4],
         has_box: flags[5],
-        body_size: None,
+        body_size,
     };
 
     let simbox = if header.has_box {
@@ -397,7 +427,7 @@ fn parse_legacy(bytes: &[u8]) -> Result<minitpr::TprFile, TprError> {
         let count = i64::from(n_coupling_groups) * if version < 69 { 2 } else { 1 };
         reader.skip_reals(precision, count)?;
     }
-    let symbols = parse_legacy_symbols(&mut reader)?;
+    let symbols = parse_legacy_symbols(&mut reader, modern_body)?;
     let system_name = symbols
         .get(reader.usize("system name index")?)
         .ok_or_else(|| TprError::Parse("system name index is outside the symbol table".to_owned()))?
@@ -408,8 +438,9 @@ fn parse_legacy(bytes: &[u8]) -> Result<minitpr::TprFile, TprError> {
         version,
         precision,
         header.has_topology,
+        modern_body,
     )?;
-    skip_legacy_topology_tail(&mut reader, version, precision, atnr)?;
+    skip_legacy_topology_tail(&mut reader, version, precision, atnr, modern_body)?;
     if header.has_positions {
         for atom in atoms.iter_mut() {
             atom.position = Some(reader.vector(precision)?);
@@ -447,11 +478,14 @@ fn parse_legacy(bytes: &[u8]) -> Result<minitpr::TprFile, TprError> {
     })
 }
 
-fn parse_legacy_symbols(reader: &mut LegacyReader<'_>) -> Result<Vec<String>, TprError> {
+fn parse_legacy_symbols(
+    reader: &mut LegacyReader<'_>,
+    modern_body: bool,
+) -> Result<Vec<String>, TprError> {
     let count = reader.count("symbol count")?;
     let mut symbols = Vec::new();
     for _ in 0..count {
-        symbols.push(reader.string()?);
+        symbols.push(reader.string_body(modern_body)?);
     }
     Ok(symbols)
 }
@@ -462,6 +496,7 @@ fn parse_legacy_topology(
     version: i32,
     precision: minitpr::Precision,
     has_topology: bool,
+    modern_body: bool,
 ) -> Result<(Vec<minitpr::Atom>, Vec<minitpr::Bond>, i32), TprError> {
     if !has_topology {
         return Err(TprError::Parse(
@@ -489,7 +524,11 @@ fn parse_legacy_topology(
     let mut molecule_types = Vec::new();
     for _ in 0..molecule_type_count {
         molecule_types.push(parse_legacy_molecule_type(
-            reader, symbols, version, precision,
+            reader,
+            symbols,
+            version,
+            precision,
+            modern_body,
         )?);
     }
     let molecule_block_count = reader.count("molecule block count")?;
@@ -577,6 +616,7 @@ fn parse_legacy_molecule_type(
     symbols: &[String],
     version: i32,
     precision: minitpr::Precision,
+    modern_body: bool,
 ) -> Result<LegacyMolecule, TprError> {
     let _molecule_name = symbol(symbols, reader.usize("molecule name index")?)?;
     let atom_count = reader.count("molecule atom count")?;
@@ -586,8 +626,8 @@ fn parse_legacy_molecule_type(
         let mass = reader.real(precision)?;
         let charge = reader.real(precision)?;
         reader.skip_reals(precision, 2)?;
-        reader.legacy_ushort()?;
-        reader.legacy_ushort()?;
+        reader.legacy_ushort(modern_body)?;
+        reader.legacy_ushort(modern_body)?;
         reader.i32()?;
         let residue_index = reader.i32()?;
         let atomic_number = reader.i32()?;
@@ -615,7 +655,7 @@ fn parse_legacy_molecule_type(
         let name = symbol(symbols, reader.usize("residue name index")?)?.to_owned();
         if version >= 63 {
             reader.i32()?;
-            reader.legacy_uchar()?;
+            reader.legacy_uchar(modern_body)?;
         }
         residues.push(name);
     }
@@ -728,8 +768,82 @@ fn skip_legacy_topology_tail(
     version: i32,
     precision: minitpr::Precision,
     atnr: i32,
+    modern_body: bool,
 ) -> Result<(), TprError> {
-    reader.i32()?;
+    // The topology reader leaves the molecule blocks immediately before the
+    // atom-count and optional intermolecular interaction list.  Consume those
+    // fields before skipping the version-specific tables that follow.
+    let _atom_tail = reader.i32()?;
+    if version >= 103 && reader.legacy_uchar(modern_body)? != 0 {
+        for function in 0..F_NRE {
+            if legacy_function_unavailable(version, function) {
+                continue;
+            }
+            let count = reader.count("intermolecular interaction list length")?;
+            reader.skip_i32s(i64::try_from(count).map_err(|_| {
+                TprError::Parse("intermolecular interaction list length overflow".to_owned())
+            })?)?;
+        }
+    }
+    if modern_body {
+        if version < 128 {
+            let ntypes = reader.count("atom type count")?;
+            if version < 113 {
+                reader.skip_reals(
+                    precision,
+                    i64::try_from(ntypes)
+                        .map_err(|_| TprError::Parse("atom type count overflow".to_owned()))?
+                        * 5,
+                )?;
+            }
+            reader.skip_i32s(
+                i64::try_from(ntypes)
+                    .map_err(|_| TprError::Parse("atom type count overflow".to_owned()))?,
+            )?;
+        }
+        let ngrid = reader.count("dihedral grid count")?;
+        let spacing = reader.count("dihedral grid spacing")?;
+        let ngrid = i64::try_from(ngrid)
+            .map_err(|_| TprError::Parse("dihedral grid count overflow".to_owned()))?;
+        let spacing = i64::try_from(spacing)
+            .map_err(|_| TprError::Parse("dihedral grid spacing overflow".to_owned()))?;
+        let total = ngrid
+            .checked_mul(spacing)
+            .and_then(|value| value.checked_mul(spacing))
+            .and_then(|value| value.checked_mul(4))
+            .ok_or_else(|| TprError::Parse("dihedral grid size overflow".to_owned()))?;
+        reader.skip_reals(precision, total)?;
+        for _ in 0..10 {
+            let count = reader.count("atom group size")?;
+            reader.skip_i32s(
+                i64::try_from(count)
+                    .map_err(|_| TprError::Parse("atom group size overflow".to_owned()))?,
+            )?;
+        }
+        let names = reader.count("atom group name count")?;
+        reader.skip_i32s(
+            i64::try_from(names)
+                .map_err(|_| TprError::Parse("atom group name count overflow".to_owned()))?,
+        )?;
+        for _ in 0..10 {
+            let count = reader.count("atom group number count")?;
+            reader.skip_legacy_uchars(
+                i64::try_from(count)
+                    .map_err(|_| TprError::Parse("atom group number count overflow".to_owned()))?,
+                modern_body,
+            )?;
+        }
+        if version >= 120 {
+            let count = reader.i64()?;
+            if count < 0 {
+                return Err(TprError::Parse(
+                    "negative intermolecular exclusion group size".to_owned(),
+                ));
+            }
+            reader.skip_i32s(count)?;
+        }
+        return Ok(());
+    }
     if version < 116 {
         reader.skip_i32s(
             i64::from(atnr.max(0))
@@ -788,6 +902,7 @@ fn skip_legacy_topology_tail(
         reader.skip_legacy_uchars(
             i64::try_from(count)
                 .map_err(|_| TprError::Parse("atom group number count overflow".to_owned()))?,
+            modern_body,
         )?;
     }
     Ok(())
@@ -1069,7 +1184,12 @@ impl<'a> LegacyReader<'a> {
             .checked_add(count)
             .ok_or_else(|| TprError::Parse("TPR offset overflow".to_owned()))?;
         if end > self.bytes.len() {
-            return Err(TprError::Parse("unexpected end of TPR file".to_owned()));
+            return Err(TprError::Parse(format!(
+                "unexpected end of TPR file at offset {} (requested {} bytes, file length {})",
+                self.position,
+                count,
+                self.bytes.len()
+            )));
         }
         let value = &self.bytes[self.position..end];
         self.position = end;
@@ -1140,16 +1260,32 @@ impl<'a> LegacyReader<'a> {
         )
     }
 
-    fn skip_legacy_uchars(&mut self, count: i64) -> Result<(), TprError> {
-        self.skip_i32s(count)
+    fn skip_legacy_uchars(&mut self, count: i64, modern_body: bool) -> Result<(), TprError> {
+        if modern_body {
+            let count = usize::try_from(count)
+                .map_err(|_| TprError::Parse("negative TPR uchar count".to_owned()))?;
+            self.skip(count)
+        } else {
+            self.skip_i32s(count)
+        }
     }
 
-    fn legacy_ushort(&mut self) -> Result<u32, TprError> {
-        self.u32()
+    fn legacy_ushort(&mut self, modern_body: bool) -> Result<u32, TprError> {
+        if modern_body {
+            Ok(u32::from(u16::from_be_bytes(
+                self.take(2)?.try_into().unwrap(),
+            )))
+        } else {
+            self.u32()
+        }
     }
 
-    fn legacy_uchar(&mut self) -> Result<u32, TprError> {
-        self.u32()
+    fn legacy_uchar(&mut self, modern_body: bool) -> Result<u32, TprError> {
+        if modern_body {
+            Ok(u32::from(self.take(1)?[0]))
+        } else {
+            self.u32()
+        }
     }
 
     fn count(&mut self, name: &str) -> Result<usize, TprError> {
@@ -1175,6 +1311,22 @@ impl<'a> LegacyReader<'a> {
             .and_then(|value| value.checked_mul(4))
             .ok_or_else(|| TprError::Parse("TPR string length overflow".to_owned()))?;
         self.skip(padded - length)?;
+        let end = bytes
+            .iter()
+            .position(|&value| value == 0)
+            .unwrap_or(bytes.len());
+        std::str::from_utf8(&bytes[..end])
+            .map(str::to_owned)
+            .map_err(|error| TprError::Parse(format!("invalid TPR string: {error}")))
+    }
+
+    fn string_body(&mut self, modern_body: bool) -> Result<String, TprError> {
+        if !modern_body {
+            return self.string();
+        }
+        let length = usize::try_from(self.i64()?)
+            .map_err(|_| TprError::Parse("negative TPR string length".to_owned()))?;
+        let bytes = self.take(length)?;
         let end = bytes
             .iter()
             .position(|&value| value == 0)
@@ -1283,6 +1435,66 @@ mod tests {
     }
 
     #[test]
+    fn bytes_virtual_site_fixture_falls_back_from_minitpr_panic() {
+        let bytes = std::fs::read(fixture("virtual_sites/extra-interactions-2018.tpr"))
+            .expect("fixture bytes");
+        let file = TprFile::from_bytes(&bytes).expect("virtual-site TPR bytes should parse");
+        assert_eq!(file.header.tpr_version, 112);
+        assert_eq!(file.n_atoms(), 17);
+        assert_eq!(file.n_bonds(), 12);
+        let position = file.frame(0).expect("initial TPR frame").positions[0];
+        for (actual, expected) in position.iter().zip([4.446, 4.659, 2.384]) {
+            assert!((actual - expected).abs() < 1e-5);
+        }
+    }
+
+    #[test]
+    fn legacy_parser_handles_compact_body_virtual_site_fixture() {
+        for name in [
+            "virtual_sites/extra-interactions-2020.tpr",
+            "virtual_sites/extra-interactions-2021.tpr",
+            "virtual_sites/extra-interactions-2022-rc1.tpr",
+            "virtual_sites/extra-interactions-2023.tpr",
+            "virtual_sites/extra-interactions-2024.tpr",
+            "virtual_sites/extra-interactions-2024_4.tpr",
+            "virtual_sites/extra-interactions-2025_0.tpr",
+            "virtual_sites/extra-interactions-2026_0.tpr",
+        ] {
+            let bytes = std::fs::read(fixture(name)).expect("fixture bytes");
+            let file = parse_legacy(&bytes).unwrap_or_else(|error| panic!("{name}: {error}"));
+            assert!(!file.topology.atoms.is_empty(), "{name} has no atoms");
+            assert_eq!(file.topology.bonds.len(), 12, "{name} bond topology");
+            let position = file
+                .topology
+                .atoms
+                .first()
+                .and_then(|atom| atom.position)
+                .expect("initial atom position");
+            for (actual, expected) in position.iter().zip([4.446, 4.659, 2.384]) {
+                assert!((actual - expected).abs() < 1e-5, "{name} first coordinate");
+            }
+        }
+    }
+
+    #[test]
+    fn legacy_parser_handles_modern_lysozyme_fixture() {
+        let bytes = std::fs::read(fixture("2lyz_gmx_2024.tpr")).expect("fixture bytes");
+        let file = parse_legacy(&bytes).expect("modern TPR should parse with fallback reader");
+        assert_eq!(file.header.tpr_version, 133);
+        assert_eq!(file.topology.atoms.len(), 2263);
+        assert_eq!(file.topology.bonds.len(), 2186);
+        let position = file
+            .topology
+            .atoms
+            .first()
+            .and_then(|atom| atom.position)
+            .expect("initial atom position");
+        for (actual, expected) in position.iter().zip([0.325, 1.004, 1.038]) {
+            assert!((actual - expected).abs() < 1e-5);
+        }
+    }
+
+    #[test]
     fn reads_legacy_v58_fixture() {
         let file = read_tpr(
             PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -1339,6 +1551,68 @@ mod tests {
                 assert!((frame.positions[0][0] - 1.487).abs() < 1e-12);
                 assert!((frame.positions[0][1] - 4.026).abs() < 1e-12);
                 assert!((frame.positions[0][2] - 7.954).abs() < 1e-12);
+            }
+        }
+    }
+
+    #[test]
+    fn reads_all_bundled_modern_fixtures() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../mdanalysis/testsuite/MDAnalysisTests/data/tprs");
+        let names = [
+            "2lyz_gmx_5.1.tpr",
+            "2lyz_gmx_2016.tpr",
+            "2lyz_gmx_2018.tpr",
+            "2lyz_gmx_2019-beta3.tpr",
+            "2lyz_gmx_2020.tpr",
+            "2lyz_gmx_2020_double.tpr",
+            "2lyz_gmx_2021.tpr",
+            "2lyz_gmx_2021_double.tpr",
+            "2lyz_gmx_2022-rc1.tpr",
+            "2lyz_gmx_2023.tpr",
+            "2lyz_gmx_2024.tpr",
+            "2lyz_gmx_2024_4.tpr",
+            "2lyz_gmx_2025_0.tpr",
+            "2lyz_gmx_2026_0.tpr",
+            "all_bonded/dummy_2016.tpr",
+            "all_bonded/dummy_2018.tpr",
+            "all_bonded/dummy_2019-beta3.tpr",
+            "all_bonded/dummy_2020.tpr",
+            "all_bonded/dummy_2020_double.tpr",
+            "all_bonded/dummy_2021.tpr",
+            "all_bonded/dummy_2021_double.tpr",
+            "all_bonded/dummy_2022-rc1.tpr",
+            "all_bonded/dummy_2023.tpr",
+            "all_bonded/dummy_2024.tpr",
+            "all_bonded/dummy_2024_4.tpr",
+            "all_bonded/dummy_2025_0.tpr",
+            "all_bonded/dummy_2026_0.tpr",
+            "all_bonded/dummy_5.1.tpr",
+            "virtual_sites/extra-interactions-2016.3.tpr",
+            "virtual_sites/extra-interactions-2018.tpr",
+            "virtual_sites/extra-interactions-2020.tpr",
+            "virtual_sites/extra-interactions-2021.tpr",
+            "virtual_sites/extra-interactions-2022-rc1.tpr",
+            "virtual_sites/extra-interactions-2023.tpr",
+            "virtual_sites/extra-interactions-2024.tpr",
+            "virtual_sites/extra-interactions-2024_4.tpr",
+            "virtual_sites/extra-interactions-2025_0.tpr",
+            "virtual_sites/extra-interactions-2026_0.tpr",
+        ];
+        for name in names {
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                read_tpr(root.join(name))
+            }))
+            .unwrap_or_else(|_| panic!("{name} should not panic while parsing"));
+            let file = result.unwrap_or_else(|error| panic!("{name} should parse: {error}"));
+            assert!(file.n_atoms() > 0, "{name} has no atoms");
+            let frame = file.frame(0).unwrap();
+            assert_eq!(frame.n_atoms(), file.n_atoms());
+            if name.starts_with("virtual_sites/") {
+                assert_eq!(file.n_bonds(), 12, "{name} bond topology");
+                for (actual, expected) in frame.positions[0].iter().zip([4.446, 4.659, 2.384]) {
+                    assert!((actual - expected).abs() < 1e-5, "{name} first coordinate");
+                }
             }
         }
     }

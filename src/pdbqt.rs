@@ -120,7 +120,8 @@ impl PdbqtStructure {
 
     /// Read a PDBQT document from a filesystem path.
     pub fn read_file<P: AsRef<Path>>(path: P) -> Result<Self, PdbqtError> {
-        Self::read(File::open(path)?)
+        let input = crate::io_utils::read_text_file(path.as_ref())?;
+        Self::from_str(&input)
     }
 
     /// Serialize this structure as a PDBQT document.

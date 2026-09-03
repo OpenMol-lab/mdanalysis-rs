@@ -1,7 +1,7 @@
 //! Core topology and trajectory objects.
 
 use crate::amber::{InpcrdFile, NamdBinFile, read_inpcrd, read_namdbin};
-use crate::coordinates::CoordinateFile;
+use crate::coordinates::{CoordinateFile, read_gro, read_xyz};
 use crate::dcd::DcdFile;
 use crate::formats::Structure;
 use crate::gsd::{GsdFile, read_gsd};
@@ -731,7 +731,7 @@ impl Universe {
 
     /// Construct a universe from a text XYZ file.
     pub fn from_xyz(path: impl AsRef<Path>) -> crate::Result<Self> {
-        Self::from_coordinate_file(CoordinateFile::read_xyz(std::fs::File::open(path)?)?)
+        Self::from_coordinate_file(read_xyz(path)?)
     }
 
     /// Construct a universe directly from an XYZ document held in memory.
@@ -742,7 +742,7 @@ impl Universe {
     /// Construct a universe from a Gromacs GRO file. Coordinates retain the
     /// nanometre units used by GRO; callers can convert with [`crate::units`].
     pub fn from_gro(path: impl AsRef<Path>) -> crate::Result<Self> {
-        Self::from_coordinate_file(CoordinateFile::read_gro(std::fs::File::open(path)?)?)
+        Self::from_coordinate_file(read_gro(path)?)
     }
 
     /// Construct a universe directly from a GRO document held in memory.
@@ -828,10 +828,7 @@ impl Universe {
         psf_path: impl AsRef<Path>,
         xyz_path: impl AsRef<Path>,
     ) -> crate::Result<Self> {
-        Self::from_psf_and_coordinate_file(
-            read_psf(psf_path)?,
-            CoordinateFile::read_xyz(std::fs::File::open(xyz_path)?)?,
-        )
+        Self::from_psf_and_coordinate_file(read_psf(psf_path)?, read_xyz(xyz_path)?)
     }
 
     /// Construct a universe from PSF and XYZ documents held in memory.
@@ -847,10 +844,7 @@ impl Universe {
         psf_path: impl AsRef<Path>,
         gro_path: impl AsRef<Path>,
     ) -> crate::Result<Self> {
-        Self::from_psf_and_coordinate_file(
-            read_psf(psf_path)?,
-            CoordinateFile::read_gro(std::fs::File::open(gro_path)?)?,
-        )
+        Self::from_psf_and_coordinate_file(read_psf(psf_path)?, read_gro(gro_path)?)
     }
 
     /// Construct a universe from PSF and GRO documents held in memory.

@@ -22,6 +22,7 @@ pub mod gsd;
 pub mod guesser;
 pub mod h5md;
 pub mod hoomdxml;
+mod io_utils;
 pub mod itp;
 pub mod lammps;
 pub mod mdamath;

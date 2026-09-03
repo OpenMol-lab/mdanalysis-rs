@@ -110,7 +110,8 @@ impl DlpolyConfig {
     }
 
     pub fn read_file<P: AsRef<Path>>(path: P) -> Result<Self, DlpolyError> {
-        Self::read(File::open(path)?)
+        let input = crate::io_utils::read_text_file(path.as_ref())?;
+        Self::from_str(&input)
     }
 
     pub fn to_string(&self) -> Result<String, DlpolyError> {
@@ -150,7 +151,8 @@ impl DlpolyHistory {
     }
 
     pub fn read_file<P: AsRef<Path>>(path: P) -> Result<Self, DlpolyError> {
-        Self::read(File::open(path)?)
+        let input = crate::io_utils::read_text_file(path.as_ref())?;
+        Self::from_str(&input)
     }
 
     pub fn n_frames(&self) -> usize {

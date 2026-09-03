@@ -220,7 +220,7 @@ impl From<io::Error> for CoordinateError {
 
 /// Read an XYZ coordinate file from a path.
 pub fn read_xyz<P: AsRef<Path>>(path: P) -> Result<CoordinateFile, CoordinateError> {
-    CoordinateFile::read_xyz(File::open(path)?)
+    CoordinateFile::from_xyz_str(&crate::io_utils::read_text_file(path.as_ref())?)
 }
 
 /// Write an XYZ coordinate file to a path.
@@ -233,7 +233,7 @@ pub fn write_xyz<P: AsRef<Path>>(
 
 /// Read a GRO coordinate file from a path.
 pub fn read_gro<P: AsRef<Path>>(path: P) -> Result<CoordinateFile, CoordinateError> {
-    CoordinateFile::read_gro(File::open(path)?)
+    CoordinateFile::from_gro_str(&crate::io_utils::read_text_file(path.as_ref())?)
 }
 
 /// Write a GRO coordinate file to a path.

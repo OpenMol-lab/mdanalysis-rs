@@ -84,7 +84,8 @@ impl TxyzFile {
 
     /// Read a Tinker document from a filesystem path.
     pub fn read_file<P: AsRef<Path>>(path: P) -> Result<Self, TxyzError> {
-        Self::read(File::open(path)?)
+        let input = crate::io_utils::read_text_file(path.as_ref())?;
+        Self::from_str(&input)
     }
 
     /// Build a topology-free Tinker document from coordinate frames.

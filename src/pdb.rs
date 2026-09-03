@@ -132,7 +132,8 @@ impl PdbStructure {
 
     /// Read a PDB document from a file.
     pub fn read_file<P: AsRef<Path>>(path: P) -> Result<Self, PdbError> {
-        Self::read(File::open(path)?)
+        let input = crate::io_utils::read_text_file(path.as_ref())?;
+        Self::from_str(&input)
     }
 
     /// Number of coordinate frames in this structure.

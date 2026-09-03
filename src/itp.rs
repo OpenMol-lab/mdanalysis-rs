@@ -338,10 +338,11 @@ impl Preprocessor {
                 message: "recursive include detected".to_string(),
             });
         }
-        let input = std::fs::read_to_string(&resolved).map_err(|error| ItpError::Include {
-            path: resolved.clone(),
-            message: error.to_string(),
-        })?;
+        let input =
+            crate::io_utils::read_text_file(&resolved).map_err(|error| ItpError::Include {
+                path: resolved.clone(),
+                message: error.to_string(),
+            })?;
         self.include_stack.push(resolved);
         let origin = self.include_stack.last().cloned();
         let result = self.process_text(&input, origin.as_deref());

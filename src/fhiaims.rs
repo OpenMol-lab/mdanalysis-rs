@@ -40,7 +40,8 @@ impl FhiaimsFile {
 
     /// Read a FHI-AIMS geometry document from a path.
     pub fn read_file<P: AsRef<Path>>(path: P) -> Result<Self, FhiaimsError> {
-        Self::read(File::open(path)?)
+        let input = crate::io_utils::read_text_file(path.as_ref())?;
+        Self::from_str(&input)
     }
 
     /// Serialize the geometry using absolute Cartesian atom positions.

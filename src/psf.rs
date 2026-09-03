@@ -107,7 +107,8 @@ impl PsfStructure {
 
     /// Read a PSF document from a filesystem path.
     pub fn read_file<P: AsRef<Path>>(path: P) -> Result<Self, PsfError> {
-        Self::read(File::open(path)?)
+        let input = crate::io_utils::read_text_file(path.as_ref())?;
+        Self::from_str(&input)
     }
 
     /// Serialize this topology as a standard PSF document.
