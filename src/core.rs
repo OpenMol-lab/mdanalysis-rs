@@ -4,6 +4,7 @@ use crate::amber::{InpcrdFile, NamdBinFile, read_inpcrd, read_namdbin};
 use crate::coordinates::CoordinateFile;
 use crate::dcd::DcdFile;
 use crate::formats::Structure;
+use crate::gsd::{GsdFile, read_gsd};
 use crate::pdb::{PdbAtom, PdbBond, PdbStructure, read_pdb};
 use crate::pdbqt::{PdbqtAtom, PdbqtStructure, read_pdbqt};
 use crate::psf::{PsfStructure, read_psf};
@@ -742,6 +743,16 @@ impl Universe {
     /// Construct a universe directly from a GRO document held in memory.
     pub fn from_gro_str(input: &str) -> crate::Result<Self> {
         Self::from_coordinate_file(CoordinateFile::from_gro_str(input)?)
+    }
+
+    /// Construct a universe from a HOOMD GSD topology and trajectory.
+    pub fn from_gsd(path: impl AsRef<Path>) -> crate::Result<Self> {
+        read_gsd(path)?.to_universe()
+    }
+
+    /// Construct a universe from an in-memory GSD document.
+    pub fn from_gsd_bytes(bytes: &[u8]) -> crate::Result<Self> {
+        GsdFile::from_bytes(bytes)?.to_universe()
     }
 
     /// Construct a universe from a DCD trajectory without a separate

@@ -18,6 +18,7 @@ pub mod fhiaims;
 pub mod formats;
 pub mod geometry;
 pub mod gms;
+pub mod gsd;
 pub mod guesser;
 pub mod hoomdxml;
 pub mod itp;
@@ -73,6 +74,10 @@ pub use geometry::{
     self_distance_array, weighted_rmsd,
 };
 pub use gms::{GmsAtom, GmsData, GmsError, GmsFile, GmsParser, GmsReader, GmsStructure, read_gms};
+pub use gsd::{
+    GsdAngle, GsdAtom, GsdBond, GsdData, GsdDihedral, GsdError, GsdFile, GsdFrame, GsdImproper,
+    GsdParticle, GsdStructure, read_gsd,
+};
 pub use guesser::{Guesser, GuesserError, guess_bonds, guess_element, guess_mass};
 pub use hoomdxml::{
     HoomdXmlAngle, HoomdXmlAtom, HoomdXmlBond, HoomdXmlBox, HoomdXmlData, HoomdXmlDihedral,
@@ -127,6 +132,7 @@ pub enum Error {
     Format(formats::FormatError),
     Fhiaims(fhiaims::FhiaimsError),
     Gms(gms::GmsError),
+    Gsd(gsd::GsdError),
     Itp(itp::ItpError),
     HoomdXml(hoomdxml::HoomdXmlError),
     Distance(DistanceError),
@@ -153,6 +159,7 @@ impl std::fmt::Display for Error {
             Self::Format(error) => write!(f, "format error: {error}"),
             Self::Fhiaims(error) => write!(f, "FHI-AIMS error: {error}"),
             Self::Gms(error) => write!(f, "GMS error: {error}"),
+            Self::Gsd(error) => write!(f, "GSD error: {error}"),
             Self::Itp(error) => write!(f, "ITP error: {error}"),
             Self::HoomdXml(error) => write!(f, "HOOMD XML error: {error}"),
             Self::Distance(error) => write!(f, "distance error: {error}"),
@@ -252,6 +259,12 @@ impl From<fhiaims::FhiaimsError> for Error {
 impl From<gms::GmsError> for Error {
     fn from(error: gms::GmsError) -> Self {
         Self::Gms(error)
+    }
+}
+
+impl From<gsd::GsdError> for Error {
+    fn from(error: gsd::GsdError) -> Self {
+        Self::Gsd(error)
     }
 }
 
