@@ -410,6 +410,53 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["N", "H", "H", "H", "C", "H", "C"]
         );
+        let first = &universe.topology.atoms[0];
+        assert!((first.mass - 14.006999969482422).abs() < 1.0e-6);
+        assert!((first.charge + 0.30000001192092896).abs() < 1.0e-6);
+        assert_eq!(first.chain_id, "X");
+        assert_eq!(first.segid, "CORE");
+        assert_eq!(universe.topology.bonds[0].order, Some(1));
+    }
+
+    #[test]
+    fn reads_particle_metadata_and_cell_dimensions() {
+        let connection = Connection::open_in_memory().unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE particle (id INTEGER, anum INTEGER, x FLOAT, y FLOAT, z FLOAT, vx FLOAT, vy FLOAT, vz FLOAT, mass FLOAT, charge FLOAT, name TEXT, resname TEXT, resid INTEGER, chain TEXT, segid TEXT);
+                 CREATE TABLE bond (p0 INTEGER, p1 INTEGER, \"order\" INTEGER);
+                 CREATE TABLE global_cell (id INTEGER, x FLOAT, y FLOAT, z FLOAT);
+                 INSERT INTO particle VALUES (10, 6, 1, 2, 3, 0.1, 0.2, 0.3, 12.0, -0.25, ' CA ', ' ALA ', 7, ' A ', ' SEG ');
+                 INSERT INTO particle VALUES (20, 8, 4, 5, 6, 0.4, 0.5, 0.6, 16.0, 0.1, ' O ', ' ALA ', 7, ' A ', ' SEG ');
+                 INSERT INTO bond VALUES (10, 20, 2);
+                 INSERT INTO global_cell VALUES (1, 2, 0, 0);
+                 INSERT INTO global_cell VALUES (2, 0, 3, 0);
+                 INSERT INTO global_cell VALUES (3, 0, 0, 4);",
+            )
+            .unwrap();
+
+        let file = DmsFile::from_connection(&connection).unwrap();
+        assert_eq!(file.particles[0].name, "CA");
+        assert_eq!(file.particles[0].resname, "ALA");
+        assert_eq!(file.particles[0].chain, "A");
+        assert_eq!(file.particles[0].segid, "SEG");
+        assert_eq!(file.particles[0].velocity(), [0.1, 0.2, 0.3]);
+        assert_eq!(
+            file.global_cell,
+            Some([[2.0, 0.0, 0.0], [0.0, 3.0, 0.0], [0.0, 0.0, 4.0]])
+        );
+        let dimensions = file.dimensions().unwrap();
+        assert_eq!(&dimensions[..3], &[2.0, 3.0, 4.0]);
+        assert_eq!(&dimensions[3..], &[90.0, 90.0, 90.0]);
+
+        let universe = Universe::from_dms_file(file).unwrap();
+        assert_eq!(universe.topology.bonds[0].order, Some(2));
+        assert_eq!(
+            universe.current_frame().unwrap().dimensions,
+            Some(dimensions)
+        );
+        assert_eq!(universe.topology.atoms[0].segid, "SEG");
+        assert_eq!(universe.topology.atoms[0].chain_id, "A");
     }
 
     #[test]
@@ -429,5 +476,23 @@ mod tests {
             DmsFile::from_connection(&connection),
             Err(DmsError::InvalidStructure(_))
         ));
+    }
+
+    #[test]
+    fn rejects_bonds_to_missing_particles() {
+        let connection = Connection::open_in_memory().unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE particle (id INTEGER, anum INTEGER, x FLOAT, y FLOAT, z FLOAT, vx FLOAT, vy FLOAT, vz FLOAT, mass FLOAT, charge FLOAT, name TEXT, resname TEXT, resid INTEGER, chain TEXT, segid TEXT);
+                 CREATE TABLE bond (p0 INTEGER, p1 INTEGER, \"order\" INTEGER);
+                 INSERT INTO particle VALUES (10, 6, 0, 0, 0, 0, 0, 0, 12, 0, 'C', 'UNK', 1, '', '');
+                 INSERT INTO bond VALUES (10, 99, 1);",
+            )
+            .unwrap();
+
+        let error = DmsFile::from_connection(&connection).unwrap_err();
+        assert!(
+            matches!(error, DmsError::InvalidStructure(message) if message.contains("missing particle"))
+        );
     }
 }
