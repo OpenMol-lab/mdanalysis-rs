@@ -160,6 +160,11 @@ impl CoordinateFile {
     pub fn from_gms_str(input: &str) -> Result<Self, GmsError> {
         Ok(GmsFile::from_str(input)?.coordinates)
     }
+
+    /// Parse GAMESS output bytes and retain only coordinate frames.
+    pub fn from_gms_bytes(bytes: &[u8]) -> Result<Self, GmsError> {
+        Ok(GmsFile::from_bytes(bytes)?.coordinates)
+    }
 }
 
 impl crate::core::Universe {
@@ -171,6 +176,12 @@ impl crate::core::Universe {
     /// Construct a universe from GAMESS output held in memory.
     pub fn from_gms_str(input: &str) -> crate::Result<Self> {
         Self::from_gms_file(GmsFile::from_str(input)?)
+    }
+
+    /// Construct a universe from GAMESS output bytes, including compressed
+    /// gzip and bzip2 streams.
+    pub fn from_gms_bytes(bytes: &[u8]) -> crate::Result<Self> {
+        Self::from_gms_file(GmsFile::from_bytes(bytes)?)
     }
 
     /// Construct a universe from parsed GAMESS output.
@@ -683,6 +694,16 @@ mod tests {
         std::io::Write::write_all(&mut encoder, &plain).unwrap();
         let bzip = encoder.finish().unwrap();
         assert_eq!(GmsFile::from_bytes(&bzip).unwrap().n_atoms, 6);
+        assert_eq!(
+            CoordinateFile::from_gms_bytes(&bzip).unwrap().n_frames(),
+            21
+        );
+        assert_eq!(
+            crate::core::Universe::from_gms_bytes(&bzip)
+                .unwrap()
+                .n_atoms(),
+            6
+        );
     }
 
     #[test]
