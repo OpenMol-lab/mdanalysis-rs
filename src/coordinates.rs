@@ -377,10 +377,22 @@ fn parse_gro(input: &str) -> Result<CoordinateFile, CoordinateError> {
     frame.atom_ids.clear();
     let mut velocities = Vec::with_capacity(atom_count);
     let mut any_velocity = false;
+    let mut residue_offset = 0_i32;
+    let mut previous_residue_id: Option<i32> = None;
     for atom_index in 0..atom_count {
         let line_number = atom_index + 3;
         let line = lines[atom_index + 2];
         let residue_id = parse_field::<i32>(line, 0, 5, "GRO", line_number, "residue id")?;
+        // GRO has only five columns for residue IDs.  GROMACS writers wrap
+        // the field at 100000, so restore a monotonic logical ID when a
+        // trajectory crosses that boundary.  A large-decrease threshold
+        // leaves ordinary zero-based and non-monotonic inputs untouched.
+        if previous_residue_id.is_some_and(|previous| previous.saturating_sub(residue_id) > 50_000)
+        {
+            residue_offset = residue_offset.saturating_add(100_000);
+        }
+        let residue_id = residue_id.saturating_add(residue_offset);
+        previous_residue_id = Some(residue_id - residue_offset);
         let residue_name = fixed_field(line, 5, 10).trim().to_owned();
         let atom_name = fixed_field(line, 10, 15).trim().to_owned();
         if residue_name.is_empty() {
@@ -871,5 +883,35 @@ mod tests {
     fn malformed_xyz_reports_format_and_line() {
         let error = CoordinateFile::from_xyz_str("1\ncomment\nC 0 nope 1\n").unwrap_err();
         assert!(error.to_string().contains("XYZ parse error on line 3"));
+    }
+
+    #[test]
+    fn gro_restores_wrapped_residue_ids() {
+        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../mdanalysis/testsuite/MDAnalysisTests/data");
+        let wrapped = read_gro(root.join("residwrap.gro")).unwrap();
+        let zero_based = read_gro(root.join("residwrap_0base.gro")).unwrap();
+        let wrapped_ids = wrapped.frames[0]
+            .residue_ids
+            .iter()
+            .copied()
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        let zero_based_ids = zero_based.frames[0]
+            .residue_ids
+            .iter()
+            .copied()
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        assert_eq!(
+            wrapped_ids,
+            vec![1, 99_999, 100_000, 100_001, 199_999, 200_000, 200_001]
+        );
+        assert_eq!(
+            zero_based_ids,
+            vec![0, 99_999, 100_000, 100_001, 199_999, 200_000, 200_001]
+        );
     }
 }
