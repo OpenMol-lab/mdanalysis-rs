@@ -130,6 +130,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "hdf5-pure"
+version = "0.43.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "66128160ea45da96651f9684c8a1719bbc1a8b47232c1ab18cc704bcef283044"
+dependencies = [
+ "byteorder",
+ "flate2",
+]
+
+[[package]]
 name = "heck"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -164,6 +174,7 @@ version = "0.1.0"
 dependencies = [
  "bzip2",
  "flate2",
+ "hdf5-pure",
  "minitpr",
  "netcdf3",
  "quick-xml",

@@ -20,6 +20,7 @@ pub mod geometry;
 pub mod gms;
 pub mod gsd;
 pub mod guesser;
+pub mod h5md;
 pub mod hoomdxml;
 pub mod itp;
 pub mod lammps;
@@ -86,6 +87,7 @@ pub use gsd::{
     GsdParticle, GsdStructure, read_gsd,
 };
 pub use guesser::{Guesser, GuesserError, guess_bonds, guess_element, guess_mass};
+pub use h5md::{H5mdData, H5mdError, H5mdFile, H5mdStructure, read_h5md};
 pub use hoomdxml::{
     HoomdXmlAngle, HoomdXmlAtom, HoomdXmlBond, HoomdXmlBox, HoomdXmlData, HoomdXmlDihedral,
     HoomdXmlError, HoomdXmlFile, HoomdXmlImproper, HoomdXmlStructure, read_hoomdxml,
@@ -153,6 +155,7 @@ pub enum Error {
     Tpr(tpr::TprError),
     Netcdf(netcdf::NetcdfError),
     Trj(trj::TrjError),
+    H5md(h5md::H5mdError),
     Itp(itp::ItpError),
     HoomdXml(hoomdxml::HoomdXmlError),
     Distance(DistanceError),
@@ -185,6 +188,7 @@ impl std::fmt::Display for Error {
             Self::Tpr(error) => write!(f, "TPR topology error: {error}"),
             Self::Netcdf(error) => write!(f, "NetCDF trajectory error: {error}"),
             Self::Trj(error) => write!(f, "Amber TRJ trajectory error: {error}"),
+            Self::H5md(error) => write!(f, "H5MD trajectory error: {error}"),
             Self::Itp(error) => write!(f, "ITP error: {error}"),
             Self::HoomdXml(error) => write!(f, "HOOMD XML error: {error}"),
             Self::Distance(error) => write!(f, "distance error: {error}"),
@@ -290,6 +294,12 @@ impl From<netcdf::NetcdfError> for Error {
 impl From<trj::TrjError> for Error {
     fn from(error: trj::TrjError) -> Self {
         Self::Trj(error)
+    }
+}
+
+impl From<h5md::H5mdError> for Error {
+    fn from(error: h5md::H5mdError) -> Self {
+        Self::H5md(error)
     }
 }
 

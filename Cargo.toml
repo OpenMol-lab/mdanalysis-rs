@@ -6,6 +6,7 @@ edition = "2024"
 [dependencies]
 bzip2 = "0.6"
 flate2 = "1.1"
+hdf5-pure = "0.43"
 minitpr = "0.2.3"
 netcdf3 = "0.6.1"
 quick-xml = "0.42"
