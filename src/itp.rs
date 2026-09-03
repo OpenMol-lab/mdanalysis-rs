@@ -716,10 +716,10 @@ fn ensure_molecule(molecules: &mut Vec<ItpMoleculeType>, current: &mut Option<us
 
 fn parse_atom(text: &str, line: usize) -> Result<ItpAtom, ItpError> {
     let fields: Vec<&str> = text.split_whitespace().collect();
-    if fields.len() < 7 {
+    if fields.len() < 6 {
         return Err(parse_error(
             line,
-            "[ atoms ] row requires at least seven fields",
+            "[ atoms ] row requires at least six fields",
         ));
     }
     let id = parse_value(fields[0], line, "atom id")?;
@@ -752,21 +752,42 @@ fn parse_atomtype(text: &str, line: usize) -> Result<ItpAtomType, ItpError> {
     let has_bonded = fields
         .get(1)
         .is_some_and(|field| field.parse::<f64>().is_err());
-    // `fields[0]` is always the atom-type name.  A bonded type, when
-    // present, occupies `fields[1]`, so the numeric payload starts at 1 or 2.
     let offset = 1 + usize::from(has_bonded);
-    if fields.len() < offset + 4 {
+    if fields.len() < offset + 3 {
         return Err(parse_error(
             line,
             "[ atomtypes ] row is missing mass or charge",
         ));
     }
-    let atomic_number = fields
+    // GROMACS accepts both `type [bonded_type] at.num mass charge ptype ...`
+    // and the shorter `type [bonded_type] mass charge ptype ...` form.  An
+    // atomic number is only considered present when it is an integer and the
+    // following fields have the standard numeric/nonnumeric shape.
+    let has_atomic_number = fields
         .get(offset)
-        .and_then(|value| value.parse::<u16>().ok());
-    let mass = parse_optional_float(fields.get(offset + 1).copied(), line, "atomtype mass")?;
-    let charge = parse_optional_float(fields.get(offset + 2).copied(), line, "atomtype charge")?;
-    let particle_type = fields.get(offset + 3).map(|value| (*value).to_string());
+        .and_then(|value| value.parse::<u16>().ok())
+        .is_some_and(|_| {
+            fields
+                .get(offset + 3)
+                .is_some_and(|value| value.chars().all(char::is_alphabetic))
+        });
+    let atomic_number = has_atomic_number.then(|| fields[offset].parse::<u16>().unwrap());
+    let value_offset = offset + usize::from(has_atomic_number);
+    if fields.len() < value_offset + 3 {
+        return Err(parse_error(
+            line,
+            "[ atomtypes ] row is missing mass or charge",
+        ));
+    }
+    let mass = parse_optional_float(fields.get(value_offset).copied(), line, "atomtype mass")?;
+    let charge = parse_optional_float(
+        fields.get(value_offset + 1).copied(),
+        line,
+        "atomtype charge",
+    )?;
+    let particle_type = fields
+        .get(value_offset + 2)
+        .map(|value| (*value).to_string());
     Ok(ItpAtomType {
         name: fields[0].to_string(),
         bonded_type: has_bonded.then(|| fields[1].to_string()),
@@ -774,7 +795,7 @@ fn parse_atomtype(text: &str, line: usize) -> Result<ItpAtomType, ItpError> {
         mass,
         charge,
         particle_type,
-        parameters: fields[(offset + 4)..]
+        parameters: fields[(value_offset + 3)..]
             .iter()
             .map(|value| (*value).to_string())
             .collect(),
@@ -1355,5 +1376,18 @@ mod tests {
             ItpData::read_file_with_options(path, options).expect("TOP fixture should parse");
         assert_eq!(data.n_atoms(), 135);
         assert_eq!(data.molecules.len(), 2);
+    }
+
+    #[test]
+    fn parses_atomtypes_and_atom_charge_fixture() {
+        let atomtypes =
+            std::path::Path::new("../mdanalysis/testsuite/MDAnalysisTests/data/atomtypes.itp");
+        let data = ItpData::read_file(atomtypes).expect("atomtypes fixture should parse");
+        assert_eq!(data.n_atoms(), 4);
+        assert_eq!(data.atoms[0].charge, Some(4.0));
+        assert_eq!(data.atoms[0].mass, Some(8.0));
+        assert_eq!(data.atoms[1].mass, Some(20.989));
+        assert_eq!(data.atoms[2].mass, Some(20.989));
+        assert_eq!(data.atoms[3].mass, Some(1.008));
     }
 }
