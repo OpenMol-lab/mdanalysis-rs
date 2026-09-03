@@ -379,9 +379,9 @@ fn parse_atom(
     // that format; retain it instead of silently truncating the residue ID.
     let standard_residue = field(line, 22, 26);
     let extended_residue = field(line, 22, 27);
-    let residue_sequence = if extended_residue.trim().len() > standard_residue.trim().len()
-        && extended_residue.trim().parse::<i32>().is_ok()
-    {
+    let is_xpdb_residue = extended_residue.trim().len() > standard_residue.trim().len()
+        && extended_residue.trim().parse::<i32>().is_ok();
+    let residue_sequence = if is_xpdb_residue {
         extended_residue
             .trim()
             .parse::<i32>()
@@ -409,7 +409,11 @@ fn parse_atom(
         chain_id: nonblank_char(field(line, 21, 22)),
         segid: nonempty_string(field(line, 72, 76)),
         residue_sequence,
-        insertion_code: nonblank_char(field(line, 26, 27)),
+        insertion_code: if is_xpdb_residue {
+            None
+        } else {
+            nonblank_char(field(line, 26, 27))
+        },
         x,
         y,
         z,
@@ -910,6 +914,7 @@ mod tests {
         assert_eq!(structure.atoms.len(), 5);
         assert_eq!(structure.atoms[3].residue_sequence, 1000);
         assert_eq!(structure.atoms[4].residue_sequence, 10000);
+        assert_eq!(structure.atoms[4].insertion_code, None);
         assert_eq!(structure.atoms[4].element, None);
         assert_eq!(structure.frames.len(), 1);
     }
