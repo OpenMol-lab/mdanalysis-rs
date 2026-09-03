@@ -737,7 +737,19 @@ impl Universe {
             .enumerate()
             .map(|(index, atom)| (atom.serial, index))
             .collect();
-        let atoms: Vec<Atom> = pdb_atoms.into_iter().map(Atom::from).collect();
+        // Match MDAnalysis' structure-wide fallback: chain IDs supply
+        // segment IDs only when the PDB has no segment field populated at
+        // all. Mixed files preserve blank segment IDs as blank values.
+        let has_segment_ids = pdb_atoms.iter().any(|atom| atom.segid.is_some());
+        let atoms: Vec<Atom> = pdb_atoms
+            .into_iter()
+            .map(|mut source| {
+                if has_segment_ids && source.segid.is_none() {
+                    source.segid = Some(String::new());
+                }
+                Atom::from(source)
+            })
+            .collect();
         let mut universe = Self::from_atoms(atoms);
         if !pdb_frames.is_empty() {
             universe.trajectory = Trajectory::new(
@@ -2191,6 +2203,45 @@ mod tests {
         let reparsed = Universe::from_pdb(&output).expect("read written PDB");
         let _ = std::fs::remove_file(output);
         assert_eq!(reparsed.topology.atoms[0].segid, "SYSTEM");
+    }
+
+    #[test]
+    fn pdb_mixed_segment_fields_keep_blank_segments_blank() {
+        let first = PdbAtom {
+            serial: 1,
+            name: "CA".to_owned(),
+            alt_loc: None,
+            residue_name: "ALA".to_owned(),
+            chain_id: Some('A'),
+            segid: Some("PROT".to_owned()),
+            residue_sequence: 1,
+            insertion_code: None,
+            x: 1.0,
+            y: 0.0,
+            z: 0.0,
+            occupancy: None,
+            temperature_factor: None,
+            element: Some("C".to_owned()),
+            charge: None,
+            hetatm: false,
+        };
+        let mut second = first.clone();
+        second.serial = 2;
+        second.chain_id = Some('B');
+        second.segid = None;
+        second.x = 2.0;
+        let input = PdbStructure {
+            atoms: vec![first, second],
+            frames: vec![vec![[1.0, 0.0, 0.0], [2.0, 0.0, 0.0]]],
+            ..PdbStructure::default()
+        }
+        .to_pdb_string()
+        .unwrap();
+
+        let universe = Universe::from_pdb_str(&input).unwrap();
+        assert_eq!(universe.topology.atoms[0].segid, "PROT");
+        assert_eq!(universe.topology.atoms[1].segid, "");
+        assert_eq!(universe.n_segments(), 2);
     }
 
     #[test]
