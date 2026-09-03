@@ -808,13 +808,13 @@ mod tests {
         .to_bytes()
         .unwrap();
         for (nsavc, delta, message) in [
-            (0, 1.0, "nsavc"),
+            (0_i32, 1.0, "nsavc"),
             (-1, 1.0, "nsavc"),
             (1, f64::NAN, "delta"),
             (1, f64::INFINITY, "delta"),
         ] {
             let mut bytes = valid.clone();
-            bytes[16..20].copy_from_slice(&(nsavc as i32).to_le_bytes());
+            bytes[16..20].copy_from_slice(&nsavc.to_le_bytes());
             bytes[44..48].copy_from_slice(&(delta as f32).to_le_bytes());
             let error = DcdFile::from_bytes(&bytes).unwrap_err();
             assert!(error.to_string().contains(message));
