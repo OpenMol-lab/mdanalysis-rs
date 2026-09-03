@@ -280,7 +280,7 @@ impl Topology {
     pub fn rebuild_hierarchy(&mut self) {
         self.residues.clear();
         self.segments.clear();
-        let mut residue_keys: Vec<(i32, String, String, Option<char>)> = Vec::new();
+        let mut previous_residue_key: Option<(i32, String, String, Option<char>)> = None;
         for atom_index in 0..self.atoms.len() {
             self.atoms[atom_index].index = atom_index;
             let atom = &self.atoms[atom_index];
@@ -290,19 +290,18 @@ impl Topology {
                 atom.segid.clone(),
                 atom.insertion_code,
             );
-            let residue_index = residue_keys
-                .iter()
-                .position(|candidate| candidate == &key)
-                .unwrap_or_else(|| {
-                    residue_keys.push(key);
-                    self.residues.push(Residue::new(
-                        self.residues.len(),
-                        atom.resid,
-                        atom.resname.clone(),
-                        atom.segment_index,
-                    ));
-                    self.residues.len() - 1
-                });
+            let residue_index = if previous_residue_key.as_ref() == Some(&key) {
+                self.residues.len() - 1
+            } else {
+                self.residues.push(Residue::new(
+                    self.residues.len(),
+                    atom.resid,
+                    atom.resname.clone(),
+                    atom.segment_index,
+                ));
+                previous_residue_key = Some(key);
+                self.residues.len() - 1
+            };
             self.atoms[atom_index].residue_index = residue_index;
             self.residues[residue_index].atom_indices.push(atom_index);
         }
@@ -1801,6 +1800,28 @@ mod tests {
             universe.atoms().center_of_mass(),
             Some([0.5714285714285714, 0.0, 0.0])
         );
+    }
+
+    #[test]
+    fn repeated_noncontiguous_residue_keys_remain_distinct() {
+        let mut first = Atom::new(0, "CA", [0.0, 0.0, 0.0]);
+        first.resid = 1;
+        first.resname = "ALA".to_owned();
+        first.segid = "S".to_owned();
+        let mut middle = Atom::new(1, "CA", [1.0, 0.0, 0.0]);
+        middle.resid = 2;
+        middle.resname = "GLY".to_owned();
+        middle.segid = "S".to_owned();
+        let mut repeated = Atom::new(2, "CA", [2.0, 0.0, 0.0]);
+        repeated.resid = 1;
+        repeated.resname = "ALA".to_owned();
+        repeated.segid = "S".to_owned();
+
+        let topology = Topology::new(vec![first, middle, repeated]);
+        assert_eq!(topology.residues.len(), 3);
+        assert_eq!(topology.residue(0).unwrap().atom_indices, vec![0]);
+        assert_eq!(topology.residue(1).unwrap().atom_indices, vec![1]);
+        assert_eq!(topology.residue(2).unwrap().atom_indices, vec![2]);
     }
 
     #[test]
