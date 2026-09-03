@@ -188,6 +188,16 @@ impl DcdFile {
         } else {
             endian.read_f64(&header_record[40..48])
         };
+        if nsavc <= 0 {
+            return Err(DcdError::InvalidStructure(
+                "DCD header nsavc must be positive".to_owned(),
+            ));
+        }
+        if !delta.is_finite() {
+            return Err(DcdError::InvalidStructure(
+                "DCD header delta must be finite".to_owned(),
+            ));
+        }
         let has_unitcell =
             is_charmm && header_record.len() >= 48 && endian.read_i32(&header_record[44..48]) != 0;
         let has_four_dimensions =
@@ -266,6 +276,18 @@ impl DcdFile {
             let mut frame = CoordinateFrame::new(positions);
             frame.title.clone_from(&title);
             frame.dimensions = dimensions;
+            let frame_index = i64::try_from(frames.len()).map_err(|_| {
+                DcdError::InvalidStructure("DCD frame index overflows i64".to_owned())
+            })?;
+            let step = i64::from(istart)
+                .checked_add(i64::from(nsavc).checked_mul(frame_index).ok_or_else(|| {
+                    DcdError::InvalidStructure("DCD frame step overflows i64".to_owned())
+                })?)
+                .ok_or_else(|| {
+                    DcdError::InvalidStructure("DCD frame step overflows i64".to_owned())
+                })?;
+            frame.step = usize::try_from(step).unwrap_or(0);
+            frame.time = delta * step as f64;
             frames.push(frame);
         }
         // A handful of legacy files have an over-large NSET header (for
@@ -734,6 +756,69 @@ mod tests {
         let parsed = DcdFile::from_bytes(&bytes).unwrap();
         assert_eq!(parsed.header.endian, DcdEndian::Big);
         assert_eq!(parsed.coordinates.frames[0].positions[0], [1.0, 2.0, 3.0]);
+    }
+
+    #[test]
+    fn dcd_preserves_frame_steps_and_times_from_header() {
+        let source = CoordinateFile::new(vec![
+            CoordinateFrame::new(vec![[1.0, 2.0, 3.0]]),
+            CoordinateFrame::new(vec![[4.0, 5.0, 6.0]]),
+            CoordinateFrame::new(vec![[7.0, 8.0, 9.0]]),
+        ]);
+        let dcd = DcdFile {
+            header: DcdHeader {
+                n_frames: 3,
+                n_atoms: 1,
+                istart: 3,
+                nsavc: 2,
+                delta: 0.5,
+                ..DcdHeader::default()
+            },
+            coordinates: source,
+        };
+        let bytes = dcd.to_bytes().unwrap();
+
+        let parsed = DcdFile::from_bytes(&bytes).unwrap();
+        let frames = &parsed.coordinates.frames;
+        assert_eq!(
+            frames.iter().map(|frame| frame.step).collect::<Vec<_>>(),
+            [3, 5, 7]
+        );
+        assert_eq!(
+            frames.iter().map(|frame| frame.time).collect::<Vec<_>>(),
+            [1.5, 2.5, 3.5]
+        );
+
+        let coordinate_file = CoordinateFile::from_dcd_bytes(&bytes).unwrap();
+        assert_eq!(coordinate_file.frames[1].step, 5);
+        assert_eq!(coordinate_file.frames[1].time, 2.5);
+    }
+
+    #[test]
+    fn dcd_rejects_nonpositive_nsavc_and_nonfinite_delta() {
+        let source = CoordinateFile::new(vec![CoordinateFrame::new(vec![[1.0, 2.0, 3.0]])]);
+        let valid = DcdFile {
+            header: DcdHeader {
+                n_frames: 1,
+                n_atoms: 1,
+                ..DcdHeader::default()
+            },
+            coordinates: source,
+        }
+        .to_bytes()
+        .unwrap();
+        for (nsavc, delta, message) in [
+            (0, 1.0, "nsavc"),
+            (-1, 1.0, "nsavc"),
+            (1, f64::NAN, "delta"),
+            (1, f64::INFINITY, "delta"),
+        ] {
+            let mut bytes = valid.clone();
+            bytes[16..20].copy_from_slice(&(nsavc as i32).to_le_bytes());
+            bytes[44..48].copy_from_slice(&(delta as f32).to_le_bytes());
+            let error = DcdFile::from_bytes(&bytes).unwrap_err();
+            assert!(error.to_string().contains(message));
+        }
     }
 
     #[test]
