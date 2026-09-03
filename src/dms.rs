@@ -254,7 +254,13 @@ fn read_global_cell(connection: &Connection) -> Result<Option<[[f64; 3]; 3]>, Dm
         vectors[count] = vector;
         count += 1;
     }
-    Ok((count == 3).then_some(vectors))
+    match count {
+        0 => Ok(None),
+        3 => Ok(Some(vectors)),
+        _ => Err(DmsError::InvalidStructure(
+            "global_cell must contain either zero or three vectors".to_string(),
+        )),
+    }
 }
 
 fn validate_structure(file: &DmsFile) -> Result<(), DmsError> {
@@ -494,5 +500,24 @@ mod tests {
         assert!(
             matches!(error, DmsError::InvalidStructure(message) if message.contains("missing particle"))
         );
+    }
+
+    #[test]
+    fn rejects_partial_global_cell() {
+        let connection = Connection::open_in_memory().unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE particle (id INTEGER, anum INTEGER, x FLOAT, y FLOAT, z FLOAT, vx FLOAT, vy FLOAT, vz FLOAT, mass FLOAT, charge FLOAT, name TEXT, resname TEXT, resid INTEGER, chain TEXT, segid TEXT);
+                 CREATE TABLE bond (p0 INTEGER, p1 INTEGER, \"order\" INTEGER);
+                 CREATE TABLE global_cell (id INTEGER, x FLOAT, y FLOAT, z FLOAT);
+                 INSERT INTO particle VALUES (0, 6, 0, 0, 0, 0, 0, 0, 12, 0, 'C', 'UNK', 1, '', '');
+                 INSERT INTO global_cell VALUES (1, 2, 0, 0);
+                 INSERT INTO global_cell VALUES (2, 0, 2, 0);",
+            )
+            .unwrap();
+        assert!(matches!(
+            DmsFile::from_connection(&connection),
+            Err(DmsError::InvalidStructure(message)) if message.contains("zero or three")
+        ));
     }
 }
