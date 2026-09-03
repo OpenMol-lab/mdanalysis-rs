@@ -39,7 +39,9 @@ pub mod units;
 pub mod xdr;
 
 pub use amber::{
-    AmberError, InpcrdFile, NamdBinFile, read_inpcrd, read_namdbin, write_inpcrd, write_namdbin,
+    AmberAngle, AmberBond, AmberDihedral, AmberError, AmberImproper, AmberTopAtom, AmberTopFile,
+    AmberTopology, InpcrdFile, NamdBinFile, PrmtopFile, read_amber_top, read_inpcrd, read_namdbin,
+    read_prmtop, read_top, write_inpcrd, write_namdbin,
 };
 pub use analysis::{
     Analysis, CenterOfMassAnalysis, MeanSquareDisplacementAnalysis, RmsdAnalysis, RmsfAnalysis,
