@@ -23,6 +23,7 @@ pub mod hoomdxml;
 pub mod itp;
 pub mod lammps;
 pub mod mdamath;
+pub mod mmtf;
 pub mod neighbor_search;
 pub mod pdb;
 pub mod pdbqt;
@@ -89,6 +90,7 @@ pub use lammps::{
     write_lammps_data,
 };
 pub use mdamath::{angle, box_volume, dihedral, norm, triclinic_box, triclinic_vectors};
+pub use mmtf::{MmtfBond, MmtfError, MmtfFile, MmtfGroup, read_mmtf};
 pub use neighbor_search::{
     AtomNeighborSearch, NeighborPairs, NeighborSearch, NeighborSearchError, PeriodicKDTree,
     SearchLevel,
@@ -256,6 +258,12 @@ impl From<gms::GmsError> for Error {
 impl From<itp::ItpError> for Error {
     fn from(error: itp::ItpError) -> Self {
         Self::Itp(error)
+    }
+}
+
+impl From<hoomdxml::HoomdXmlError> for Error {
+    fn from(error: hoomdxml::HoomdXmlError) -> Self {
+        Self::HoomdXml(error)
     }
 }
 
