@@ -1458,7 +1458,10 @@ mod tests {
             .zip(&parsed.coordinates.frames[0].positions)
         {
             for axis in 0..3 {
-                assert!((expected[axis] - actual[axis]).abs() <= 0.001);
+                // The default writer precision is 1000 in native nm units,
+                // and scaling first passes through f32.  Large coordinates
+                // therefore carry a few extra ulps of quantization error.
+                assert!((expected[axis] - actual[axis]).abs() <= 0.01);
             }
         }
     }
@@ -1537,5 +1540,107 @@ mod tests {
     fn rejects_bad_magic_and_truncated_data() {
         assert!(XtcFile::from_bytes(&[]).is_err());
         assert!(TrrFile::from_bytes(&[0, 0, 7]).is_err());
+    }
+
+    #[test]
+    fn upstream_coordinate_fixtures_parse() {
+        let root = "/home/bignox/work/test/mdanalysis/mdanalysis/testsuite/MDAnalysisTests/data";
+        for relative in [
+            "aux_edr.xtc",
+            "xyz_random_walk.xtc",
+            "cobrotoxin.xtc",
+            "coordinates/test.xtc",
+        ] {
+            let path = format!("{root}/{relative}");
+            let file = XtcFile::read(File::open(path).unwrap()).unwrap();
+            assert_eq!(file.n_atoms, file.coordinates.n_atoms());
+            assert_eq!(file.steps.len(), file.coordinates.n_frames());
+            assert_eq!(file.times.len(), file.coordinates.n_frames());
+            assert_eq!(file.precisions.len(), file.coordinates.n_frames());
+            assert!(file.coordinates.frames.iter().all(|frame| {
+                frame
+                    .positions
+                    .iter()
+                    .flatten()
+                    .all(|value| value.is_finite())
+            }));
+        }
+        for relative in ["surface.trr", "cobrotoxin.trr", "coordinates/test.trr"] {
+            let path = format!("{root}/{relative}");
+            let file = TrrFile::read(File::open(path).unwrap()).unwrap();
+            assert_eq!(file.n_atoms, file.coordinates.n_atoms());
+            assert_eq!(file.steps.len(), file.coordinates.n_frames());
+            assert_eq!(file.times.len(), file.coordinates.n_frames());
+            assert_eq!(file.forces.len(), file.coordinates.n_frames());
+            assert_eq!(file.lambdas.len(), file.coordinates.n_frames());
+            assert_eq!(file.double_precision.len(), file.coordinates.n_frames());
+            assert!(file.coordinates.frames.iter().all(|frame| {
+                frame
+                    .positions
+                    .iter()
+                    .flatten()
+                    .all(|value| value.is_finite())
+            }));
+            if relative == "surface.trr" {
+                assert!(
+                    file.coordinates
+                        .frames
+                        .iter()
+                        .all(|frame| frame.velocities.is_none())
+                );
+                assert!(file.forces.iter().all(Option::is_none));
+            } else if relative == "cobrotoxin.trr" {
+                assert!(
+                    file.coordinates
+                        .frames
+                        .iter()
+                        .all(|frame| frame.velocities.is_some())
+                );
+                assert!(file.forces.iter().all(Option::is_some));
+            } else {
+                assert_eq!(file.lambdas, vec![1.0; 5]);
+                assert!(
+                    file.coordinates
+                        .frames
+                        .iter()
+                        .all(|frame| frame.velocities.is_some())
+                );
+                assert!(file.forces.iter().all(Option::is_some));
+            }
+        }
+    }
+
+    #[test]
+    fn xtc_compression_round_trips_varied_coordinate_ranges() {
+        let mut state = 0x1234_5678_u64;
+        let mut positions = Vec::with_capacity(128);
+        for _ in 0..128 {
+            let mut position = [0.0; 3];
+            for axis in &mut position {
+                state = state
+                    .wrapping_mul(6_364_136_223_846_793_005)
+                    .wrapping_add(1);
+                let unit = (state >> 32) as f64 / u32::MAX as f64;
+                *axis = (unit * 40_000.0) - 20_000.0;
+            }
+            positions.push(position);
+        }
+        let source = CoordinateFile::new(vec![CoordinateFrame::new(positions.clone())]);
+        let file = xtc_from_coordinates(&source).unwrap();
+        let bytes = file.to_bytes(XtcWriteOptions::default()).unwrap();
+        let parsed = XtcFile::from_bytes(&bytes).unwrap();
+        for (expected, actual) in positions
+            .iter()
+            .zip(&parsed.coordinates.frames[0].positions)
+        {
+            for axis in 0..3 {
+                assert!(
+                    (expected[axis] - actual[axis]).abs() <= 0.01,
+                    "axis {axis}: expected {}, got {}",
+                    expected[axis],
+                    actual[axis]
+                );
+            }
+        }
     }
 }
