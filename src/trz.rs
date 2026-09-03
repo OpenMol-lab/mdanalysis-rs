@@ -289,7 +289,8 @@ fn coordinate_file_to_trz(coordinates: &CoordinateFile) -> TrzFile {
     let frame_numbers = coordinates
         .frames
         .iter()
-        .map(|frame| i32::try_from(frame.step.saturating_add(1)).unwrap_or(i32::MAX))
+        .enumerate()
+        .map(|(index, _)| i32::try_from(index.saturating_add(1)).unwrap_or(i32::MAX))
         .collect();
     // Keep the vectors aligned with frames even for an empty input; write()
     // emits the useful validation error in that case.
@@ -739,7 +740,7 @@ fn write_document<W: Write>(
             .frame_numbers
             .get(index)
             .copied()
-            .unwrap_or_else(|| i32::try_from(frame.step.saturating_add(1)).unwrap_or(i32::MAX));
+            .unwrap_or_else(|| i32::try_from(index.saturating_add(1)).unwrap_or(i32::MAX));
         if frame_number <= 0 {
             return Err(TrzError::InvalidStructure(
                 "TRZ frame numbers must be positive".to_owned(),
@@ -1021,6 +1022,19 @@ mod tests {
         assert_eq!(parsed.coordinates.frames[0].positions.len(), 2);
         assert!(parsed.forces[0].is_some());
         assert!((parsed.coordinates.frames[0].positions[0][0] - 1.25).abs() < 1.0e-6);
+    }
+
+    #[test]
+    fn coordinate_file_writer_uses_sequential_frame_numbers() {
+        let mut first = CoordinateFrame::new(vec![[1.0, 2.0, 3.0]]);
+        first.step = 100;
+        let mut second = CoordinateFrame::new(vec![[4.0, 5.0, 6.0]]);
+        second.step = 250;
+        let coordinates = CoordinateFile::new(vec![first, second]);
+
+        let parsed = TrzFile::from_bytes(&coordinates.to_trz_bytes().unwrap()).unwrap();
+        assert_eq!(parsed.steps, vec![100, 250]);
+        assert_eq!(parsed.frame_numbers, vec![1, 2]);
     }
 
     #[test]
