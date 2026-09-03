@@ -266,11 +266,26 @@ fn coordinate_file(parsed: &minitpr::TprFile) -> CoordinateFile {
         .iter()
         .map(|atom| atom.residue_number)
         .collect();
+    // `minitpr` uses one-based atom numbers for modern files but the legacy
+    // compatibility parser retains its historical zero-based values. Detect
+    // the convention from the first record before exposing the common
+    // one-based coordinate metadata.
+    let atom_number_offset = parsed
+        .topology
+        .atoms
+        .first()
+        .is_some_and(|atom| atom.atom_number == 0);
     frame.atom_ids = parsed
         .topology
         .atoms
         .iter()
-        .map(|atom| atom.atom_number.max(1) as usize)
+        .enumerate()
+        .map(|(index, atom)| {
+            usize::try_from(atom.atom_number)
+                .ok()
+                .and_then(|number| number.checked_add(usize::from(atom_number_offset)))
+                .unwrap_or(index + 1)
+        })
         .collect();
     frame.title = parsed.system_name.clone();
     CoordinateFile::new(vec![frame])
@@ -1407,6 +1422,7 @@ mod tests {
         assert_eq!(frame.names[0], "N");
         assert_eq!(frame.residue_names[0], "LYSH");
         assert_eq!(frame.residue_ids[0], 1);
+        assert_eq!(frame.atom_ids[..2], [1, 2]);
         assert!(frame.velocities.is_some());
         let dimensions = frame.dimensions.expect("TPR box");
         assert!((dimensions[0] - 7.91).abs() < 1e-5);
