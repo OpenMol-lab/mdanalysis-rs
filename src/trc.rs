@@ -79,6 +79,12 @@ impl TrcFile {
         self.coordinates.n_frames()
     }
 
+    /// Read-only access to one coordinate frame by zero-based index.
+    #[must_use]
+    pub fn frame(&self, index: usize) -> Option<&CoordinateFrame> {
+        self.coordinates.frame(index)
+    }
+
     /// Read and concatenate several TRC files in source order.
     ///
     /// This is the in-memory equivalent of MDAnalysis' ``continuous=True``
@@ -621,6 +627,8 @@ mod tests {
         assert_eq!(file.coordinates.frames[0].step, 0);
         assert_eq!(file.coordinates.frames[3].step, 0);
         assert_eq!(file.coordinates.frames[5].time, 100.0);
+        assert_eq!(file.frame(4).unwrap().positions[0][0], 0.037026654);
+        assert!(file.frame(6).is_none());
 
         let pdb = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../mdanalysis/testsuite/MDAnalysisTests/data/gromos11/gromos11_traj_vac.pdb.gz");
