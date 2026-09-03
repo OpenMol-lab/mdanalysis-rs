@@ -1592,8 +1592,10 @@ impl Universe {
         let first = file.frames.first().ok_or_else(|| {
             crate::Error::InvalidInput("coordinate file has no frames".to_string())
         })?;
-        let mut atoms = Vec::with_capacity(first.n_atoms());
-        for index in 0..first.n_atoms() {
+        let expected = first.n_atoms();
+        validate_coordinate_frame_counts(&file, expected, "coordinate file")?;
+        let mut atoms = Vec::with_capacity(expected);
+        for index in 0..expected {
             let name = first
                 .names
                 .get(index)
@@ -1753,6 +1755,7 @@ impl Universe {
                 self.n_atoms()
             )));
         }
+        validate_coordinate_frame_counts(&coordinates, self.n_atoms(), "trajectory")?;
         if coordinates.frames.is_empty() {
             return Err(crate::Error::InvalidInput(
                 "coordinate file has no frames".to_owned(),
@@ -1914,18 +1917,13 @@ impl Universe {
             ));
         }
         let mut frames = Vec::with_capacity(coordinate_file.frames.len());
-        for (step, source) in coordinate_file.frames.into_iter().enumerate() {
-            if source.positions.len() != expected {
-                return Err(crate::Error::InvalidInput(format!(
-                    "coordinate frame contains {} atoms, PSF contains {}",
-                    source.positions.len(),
-                    expected
-                )));
-            }
+        validate_coordinate_frame_counts(&coordinate_file, expected, "PSF")?;
+        for source in coordinate_file.frames {
             let mut frame = Frame::new(source.positions);
             frame.velocities = source.velocities;
             frame.dimensions = source.dimensions;
-            frame.step = step;
+            frame.step = source.step;
+            frame.time = source.time;
             frames.push(frame);
         }
         universe.trajectory = Trajectory::new(frames);
@@ -2427,6 +2425,23 @@ impl Universe {
         self.current_frame_mut()
             .map(|frame| frame.positions.as_mut_slice())
     }
+}
+
+fn validate_coordinate_frame_counts(
+    file: &CoordinateFile,
+    expected: usize,
+    context: &str,
+) -> crate::Result<()> {
+    for (index, frame) in file.frames.iter().enumerate() {
+        if frame.n_atoms() != expected {
+            return Err(crate::Error::InvalidInput(format!(
+                "{context} contains {expected} atoms but frame {} contains {}",
+                index + 1,
+                frame.n_atoms()
+            )));
+        }
+    }
+    Ok(())
 }
 
 fn infer_element(name: &str) -> Option<String> {
@@ -2932,6 +2947,40 @@ mod tests {
         let error = Universe::from_psf_and_xyz_str(psf, xyz).unwrap_err();
         assert!(
             matches!(error, crate::Error::InvalidInput(message) if message.contains("PSF contains 1"))
+        );
+    }
+
+    #[test]
+    fn psf_coordinate_constructor_preserves_frame_metadata() {
+        let psf = concat!(
+            "PSF\n\n",
+            "       1 !NATOM\n",
+            "       1 SEG      1 ALA      CA       CT1          0.000000      12.011000        0\n",
+        );
+        let mut coordinate = crate::coordinates::CoordinateFrame::new(vec![[1.0, 2.0, 3.0]]);
+        coordinate.step = 37;
+        coordinate.time = 4.25;
+        coordinate.dimensions = Some([10.0, 11.0, 12.0, 90.0, 90.0, 90.0]);
+        let universe = Universe::from_psf_and_coordinate_file(
+            PsfStructure::from_str(psf).unwrap(),
+            CoordinateFile::new(vec![coordinate]),
+        )
+        .unwrap();
+        let frame = universe.current_frame().unwrap();
+        assert_eq!(frame.step, 37);
+        assert_eq!(frame.time, 4.25);
+        assert_eq!(frame.dimensions, Some([10.0, 11.0, 12.0, 90.0, 90.0, 90.0]));
+    }
+
+    #[test]
+    fn coordinate_universe_constructor_rejects_inconsistent_later_frames() {
+        let coordinates = CoordinateFile::new(vec![
+            crate::coordinates::CoordinateFrame::new(vec![[0.0, 0.0, 0.0]]),
+            crate::coordinates::CoordinateFrame::new(vec![[1.0, 0.0, 0.0], [2.0, 0.0, 0.0]]),
+        ]);
+        let error = Universe::from_coordinate_file(coordinates).unwrap_err();
+        assert!(
+            matches!(error, crate::Error::InvalidInput(message) if message.contains("coordinate file contains 1 atoms"))
         );
     }
 
