@@ -19,6 +19,7 @@ pub mod formats;
 pub mod geometry;
 pub mod gms;
 pub mod guesser;
+pub mod hoomdxml;
 pub mod itp;
 pub mod lammps;
 pub mod mdamath;
@@ -72,6 +73,10 @@ pub use geometry::{
 };
 pub use gms::{GmsAtom, GmsData, GmsError, GmsFile, GmsParser, GmsReader, GmsStructure, read_gms};
 pub use guesser::{Guesser, GuesserError, guess_bonds, guess_element, guess_mass};
+pub use hoomdxml::{
+    HoomdXmlAngle, HoomdXmlAtom, HoomdXmlBond, HoomdXmlBox, HoomdXmlData, HoomdXmlDihedral,
+    HoomdXmlError, HoomdXmlFile, HoomdXmlImproper, HoomdXmlStructure, read_hoomdxml,
+};
 pub use itp::{
     ItpAngle, ItpAtom, ItpAtomType, ItpBond, ItpData, ItpDihedral, ItpError, ItpImproper,
     ItpMoleculeCount, ItpMoleculeType, ItpOptions, ItpSettle, ItpStructure, read_itp,
@@ -121,6 +126,7 @@ pub enum Error {
     Fhiaims(fhiaims::FhiaimsError),
     Gms(gms::GmsError),
     Itp(itp::ItpError),
+    HoomdXml(hoomdxml::HoomdXmlError),
     Distance(DistanceError),
     Guesser(guesser::GuesserError),
     Selection(selection::SelectionError),
@@ -146,6 +152,7 @@ impl std::fmt::Display for Error {
             Self::Fhiaims(error) => write!(f, "FHI-AIMS error: {error}"),
             Self::Gms(error) => write!(f, "GMS error: {error}"),
             Self::Itp(error) => write!(f, "ITP error: {error}"),
+            Self::HoomdXml(error) => write!(f, "HOOMD XML error: {error}"),
             Self::Distance(error) => write!(f, "distance error: {error}"),
             Self::Guesser(error) => write!(f, "guesser error: {error}"),
             Self::Selection(error) => write!(f, "selection error: {error}"),
