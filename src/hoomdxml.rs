@@ -11,6 +11,7 @@ use crate::coordinates::{CoordinateFile, CoordinateFrame};
 use crate::core::{Atom, Bond, Frame, Topology, Trajectory, Universe};
 use crate::mdamath::triclinic_box;
 use bzip2::read::BzDecoder;
+use quick_xml::escape::unescape;
 use quick_xml::events::{BytesStart, Event};
 use quick_xml::{Reader, XmlVersion};
 use std::collections::{HashMap, HashSet};
@@ -381,7 +382,9 @@ fn parse_xml(bytes: &[u8]) -> Result<HoomdXmlFile, HoomdXmlError> {
             }
             Event::Text(text) => {
                 if let Some((_, section)) = active.as_mut() {
-                    section.text.push_str(text.as_ref());
+                    let value = unescape(text.as_ref())
+                        .map_err(|error| HoomdXmlError::Xml(error.to_string()))?;
+                    section.text.push_str(&value);
                 }
             }
             Event::CData(text) => {
@@ -503,6 +506,9 @@ fn parse_box(attributes: &HashMap<String, String>) -> Result<HoomdXmlBox, HoomdX
     let values = [lx, ly, lz, xy, xz, yz];
     if values.iter().any(|value| !value.is_finite()) {
         return Err(invalid("box contains non-finite values"));
+    }
+    if [lx, ly, lz].iter().any(|value| *value <= 0.0) {
+        return Err(invalid("box lengths must be positive"));
     }
     Ok(HoomdXmlBox::new(lx, ly, lz, xy, xz, yz))
 }
