@@ -296,7 +296,15 @@ impl PdbStructure {
                     models.push(current);
                 }
                 "CRYST1" => {
-                    cryst1 = Some(parse_cryst1(line, line_number)?);
+                    match parse_cryst1(line, line_number) {
+                        Ok(value) if !is_placeholder_cryst1(&value) => cryst1 = Some(value),
+                        Ok(_) => {}
+                        // PDB files in the wild sometimes include a CRYST1
+                        // record with incomplete or malformed fields.
+                        // MDAnalysis treats such a record as absent unit-cell
+                        // data, so keep parsing the coordinate records.
+                        Err(_) => {}
+                    }
                 }
                 "CONECT" => bonds.extend(parse_conect(line, line_number)?),
                 _ => {}
@@ -373,6 +381,25 @@ fn validate_frame(structure: &PdbStructure, index: usize) -> Result<(), PdbError
             expected: structure.atoms.len(),
             found,
         });
+    }
+    for (atom_index, position) in structure.frames[index].iter().enumerate() {
+        if position.iter().any(|value| !value.is_finite()) {
+            return Err(PdbError::InvalidStructure(format!(
+                "model {} atom {} has a non-finite coordinate",
+                index + 1,
+                atom_index + 1
+            )));
+        }
+        if position
+            .iter()
+            .any(|value| *value < -999.9995 || *value > 9999.9995)
+        {
+            return Err(PdbError::InvalidStructure(format!(
+                "model {} atom {} coordinate is outside PDB range [-999.9995, 9999.9995]",
+                index + 1,
+                atom_index + 1
+            )));
+        }
     }
     Ok(())
 }
@@ -462,6 +489,15 @@ fn parse_cryst1(line: &str, line_number: usize) -> Result<PdbCryst1, PdbError> {
         space_group: field(line, 55, 66).trim().to_string(),
         z: parse_optional::<u32>(line, 66, 70, line_number, "CRYST1 Z")?,
     })
+}
+
+fn is_placeholder_cryst1(cryst1: &PdbCryst1) -> bool {
+    cryst1.a == 1.0
+        && cryst1.b == 1.0
+        && cryst1.c == 1.0
+        && cryst1.alpha == 90.0
+        && cryst1.beta == 90.0
+        && cryst1.gamma == 90.0
 }
 
 fn parse_conect(line: &str, line_number: usize) -> Result<Vec<PdbBond>, PdbError> {
@@ -1097,5 +1133,38 @@ mod tests {
         );
         let error = PdbStructure::from_str(input).expect_err("inconsistent models");
         assert!(matches!(error, PdbError::InconsistentModel { .. }));
+    }
+
+    #[test]
+    fn ignores_partially_blank_cryst1_records() {
+        let input = concat!(
+            "CRYST1                            90.00  90.00  90.00 P 1           1\n",
+            "ATOM      1  CA  GLY A   1       1.000   2.000   3.000\n",
+            "END\n",
+        );
+        let structure = PdbStructure::from_str(input).expect("partial CRYST1 is ignorable");
+        assert_eq!(structure.atoms.len(), 1);
+        assert_eq!(structure.cryst1, None);
+    }
+
+    #[test]
+    fn ignores_unitary_placeholder_cryst1_records() {
+        let input = concat!(
+            "CRYST1    1.000    1.000    1.000  90.00  90.00  90.00 P 1           1\n",
+            "ATOM      1  CA  GLY A   1       1.000   2.000   3.000\n",
+            "END\n",
+        );
+        let structure = PdbStructure::from_str(input).expect("unitary CRYST1 is a placeholder");
+        assert_eq!(structure.cryst1, None);
+    }
+
+    #[test]
+    fn rejects_coordinates_outside_fixed_width_range() {
+        let mut structure = PdbStructure::from_str(SINGLE_MODEL).expect("valid PDB");
+        structure.frames[0][0][0] = 10_000.0;
+        assert!(matches!(
+            structure.to_pdb_string(),
+            Err(PdbError::InvalidStructure(_))
+        ));
     }
 }
