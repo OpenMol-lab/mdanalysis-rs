@@ -413,8 +413,89 @@ impl Frame {
         }
     }
 
+    /// Number of atom coordinate triplets in this frame.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.positions.len()
+    }
+
+    /// Return whether this frame contains no atom coordinates.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.positions.is_empty()
+    }
+
+    /// Return the position of the atom at `index`, if it exists.
+    #[must_use]
+    pub fn get(&self, index: usize) -> Option<&[f64; 3]> {
+        self.positions.get(index)
+    }
+
+    /// Iterate over atom positions without changing the frame metadata.
+    pub fn iter(&self) -> std::slice::Iter<'_, [f64; 3]> {
+        self.positions.iter()
+    }
+
+    /// Mutably iterate over atom positions without changing the frame metadata.
+    pub fn iter_mut(&mut self) -> std::slice::IterMut<'_, [f64; 3]> {
+        self.positions.iter_mut()
+    }
+
+    /// Copy a contiguous atom range, retaining frame-level metadata.
+    pub fn slice(&self, range: std::ops::Range<usize>) -> Self {
+        let mut frame = self.clone();
+        frame.positions = self.positions[range.clone()].to_vec();
+        frame.velocities = self
+            .velocities
+            .as_ref()
+            .map(|values| values[range.clone()].to_vec());
+        frame.forces = self.forces.as_ref().map(|values| values[range].to_vec());
+        frame
+    }
+
     pub fn n_atoms(&self) -> usize {
         self.positions.len()
+    }
+}
+
+impl<'a> IntoIterator for &'a Frame {
+    type Item = &'a [f64; 3];
+    type IntoIter = std::slice::Iter<'a, [f64; 3]>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.positions.iter()
+    }
+}
+
+impl<'a> IntoIterator for &'a mut Frame {
+    type Item = &'a mut [f64; 3];
+    type IntoIter = std::slice::IterMut<'a, [f64; 3]>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.positions.iter_mut()
+    }
+}
+
+impl IntoIterator for Frame {
+    type Item = [f64; 3];
+    type IntoIter = std::vec::IntoIter<[f64; 3]>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.positions.into_iter()
+    }
+}
+
+impl std::ops::Index<usize> for Frame {
+    type Output = [f64; 3];
+
+    fn index(&self, index: usize) -> &Self::Output {
+        &self.positions[index]
+    }
+}
+
+impl std::ops::IndexMut<usize> for Frame {
+    fn index_mut(&mut self, index: usize) -> &mut Self::Output {
+        &mut self.positions[index]
     }
 }
 
@@ -2480,5 +2561,57 @@ mod tests {
         assert_eq!(trajectory.current_frame().unwrap().positions[0][0], 1.0);
         assert_eq!(trajectory.next().unwrap().positions[0][0], 1.0);
         assert_eq!(trajectory[1].positions[0][0], 3.0);
+    }
+
+    #[test]
+    fn frame_supports_atom_access_iteration_and_metadata_preserving_slices() {
+        let mut frame = Frame::new(vec![
+            [0.0, 0.0, 0.0],
+            [1.0, 1.0, 1.0],
+            [2.0, 2.0, 2.0],
+            [3.0, 3.0, 3.0],
+        ]);
+        frame.velocities = Some(vec![
+            [10.0, 10.0, 10.0],
+            [11.0, 11.0, 11.0],
+            [12.0, 12.0, 12.0],
+            [13.0, 13.0, 13.0],
+        ]);
+        frame.forces = Some(vec![
+            [20.0, 20.0, 20.0],
+            [21.0, 21.0, 21.0],
+            [22.0, 22.0, 22.0],
+            [23.0, 23.0, 23.0],
+        ]);
+        frame.dimensions = Some([4.0, 5.0, 6.0, 90.0, 90.0, 90.0]);
+        frame.time = 2.5;
+        frame.step = 17;
+        frame.data.insert("lambda".to_owned(), vec![0.25]);
+
+        assert_eq!(frame.len(), 4);
+        assert!(!frame.is_empty());
+        assert_eq!(frame.get(1), Some(&[1.0, 1.0, 1.0]));
+        assert_eq!(frame.get(4), None);
+        assert_eq!(frame[2], [2.0, 2.0, 2.0]);
+        frame[2] = [20.0, 20.0, 20.0];
+        assert_eq!(frame.iter().count(), 4);
+        frame.iter_mut().next().unwrap()[0] = -1.0;
+        assert_eq!(frame[0][0], -1.0);
+        assert_eq!((&frame).into_iter().count(), frame.len());
+
+        let sliced = frame.slice(1..3);
+        assert_eq!(sliced.positions, vec![[1.0, 1.0, 1.0], [20.0, 20.0, 20.0]]);
+        assert_eq!(
+            sliced.velocities,
+            Some(vec![[11.0, 11.0, 11.0], [12.0, 12.0, 12.0]])
+        );
+        assert_eq!(
+            sliced.forces,
+            Some(vec![[21.0, 21.0, 21.0], [22.0, 22.0, 22.0]])
+        );
+        assert_eq!(sliced.dimensions, frame.dimensions);
+        assert_eq!(sliced.time, frame.time);
+        assert_eq!(sliced.step, frame.step);
+        assert_eq!(sliced.data, frame.data);
     }
 }
