@@ -1395,7 +1395,10 @@ impl Universe {
                 alt_loc: None,
                 residue_name: atom.resname.clone(),
                 chain_id: atom.chain_id.chars().next(),
-                segid: (!atom.segid.is_empty()).then(|| atom.segid.clone()),
+                // `SYSTEM` is the crate's synthetic fallback and cannot be
+                // represented losslessly in PDB's four-column segment field.
+                segid: (!atom.segid.is_empty() && atom.segid != "SYSTEM")
+                    .then(|| atom.segid.clone()),
                 residue_sequence: atom.resid,
                 insertion_code: atom.insertion_code,
                 x: first_positions.get(index).unwrap_or(&atom.position)[0],
@@ -2150,6 +2153,23 @@ mod tests {
             reparsed.select_atoms("segid 4AKE").unwrap().len(),
             reparsed.n_atoms()
         );
+    }
+
+    #[test]
+    fn pdb_writer_keeps_synthetic_system_segment_stable() {
+        let universe = Universe::from_atoms(vec![Atom::new(0, "C", [1.0, 2.0, 3.0])]);
+        let output = std::env::temp_dir().join(format!(
+            "mdanalysis-rs-pdb-system-{}-{}.pdb",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        universe.write_pdb(&output).expect("write PDB");
+        let reparsed = Universe::from_pdb(&output).expect("read written PDB");
+        let _ = std::fs::remove_file(output);
+        assert_eq!(reparsed.topology.atoms[0].segid, "SYSTEM");
     }
 
     #[test]
