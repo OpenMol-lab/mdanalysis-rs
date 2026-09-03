@@ -31,6 +31,7 @@ pub mod pdbqt;
 pub mod psf;
 pub mod selection;
 pub mod topology_groups;
+pub mod tpr;
 pub mod transformations;
 pub mod trc;
 pub mod trz;
@@ -108,6 +109,10 @@ pub use pdb::{PdbAtom, PdbBond, PdbCryst1, PdbError, PdbStructure, read_pdb, wri
 pub use pdbqt::{PdbqtAtom, PdbqtError, PdbqtStructure, read_pdbqt, write_pdbqt};
 pub use psf::{PsfAtom, PsfBond, PsfError, PsfStructure, read_psf, write_psf};
 pub use topology_groups::{AngleValue, BondLength, DihedralValue, TopologyGroupExt};
+pub use tpr::{
+    TprAtom, TprBond, TprData, TprError, TprFile, TprHeader, TprPrecision, TprSimBox, TprStructure,
+    TprTopology, read_tpr,
+};
 pub use trc::{TrcData, TrcError, TrcFile, TrcStructure, read_trc};
 pub use trz::{TrzError, TrzFile, TrzHeader, TrzWriteOptions, read_trz, write_trz};
 pub use txyz::{
@@ -141,6 +146,7 @@ pub enum Error {
     Gms(gms::GmsError),
     Gsd(gsd::GsdError),
     Trc(trc::TrcError),
+    Tpr(tpr::TprError),
     Itp(itp::ItpError),
     HoomdXml(hoomdxml::HoomdXmlError),
     Distance(DistanceError),
@@ -170,6 +176,7 @@ impl std::fmt::Display for Error {
             Self::Gms(error) => write!(f, "GMS error: {error}"),
             Self::Gsd(error) => write!(f, "GSD error: {error}"),
             Self::Trc(error) => write!(f, "TRC trajectory error: {error}"),
+            Self::Tpr(error) => write!(f, "TPR topology error: {error}"),
             Self::Itp(error) => write!(f, "ITP error: {error}"),
             Self::HoomdXml(error) => write!(f, "HOOMD XML error: {error}"),
             Self::Distance(error) => write!(f, "distance error: {error}"),
@@ -257,6 +264,12 @@ impl From<dlpoly::DlpolyError> for Error {
 impl From<CoordinateError> for Error {
     fn from(error: CoordinateError) -> Self {
         Self::Coordinate(error)
+    }
+}
+
+impl From<tpr::TprError> for Error {
+    fn from(error: tpr::TprError) -> Self {
+        Self::Tpr(error)
     }
 }
 
