@@ -1710,6 +1710,36 @@ impl Universe {
         self.segment_atoms(index)
     }
 
+    /// Return the residue metadata at `index`, if it exists.
+    pub fn residue(&self, index: usize) -> Option<&Residue> {
+        self.topology.residue(index)
+    }
+
+    /// Return the segment metadata at `index`, if it exists.
+    pub fn segment(&self, index: usize) -> Option<&Segment> {
+        self.topology.segment(index)
+    }
+
+    /// Return all residues as atom groups in topology order.
+    ///
+    /// Each group uses the coordinates and per-atom frame data from the
+    /// currently selected trajectory frame, matching [`Universe::atoms`].
+    pub fn residues(&self) -> Vec<AtomGroup> {
+        (0..self.n_residues())
+            .filter_map(|index| self.residue_atoms(index))
+            .collect()
+    }
+
+    /// Return all segments as atom groups in topology order.
+    ///
+    /// Each group uses the coordinates and per-atom frame data from the
+    /// currently selected trajectory frame, matching [`Universe::atoms`].
+    pub fn segments(&self) -> Vec<AtomGroup> {
+        (0..self.n_segments())
+            .filter_map(|index| self.segment_atoms(index))
+            .collect()
+    }
+
     pub fn select_atoms(&self, expression: &str) -> Result<AtomGroup, SelectionError> {
         let atoms = self.atoms();
         let bonds: Vec<(usize, usize)> = self
@@ -2007,6 +2037,51 @@ mod tests {
             universe.atoms_for_segment(0).unwrap().positions(),
             vec![[10.0, 0.0, 0.0], [11.0, 0.0, 0.0], [12.0, 0.0, 0.0]]
         );
+    }
+
+    #[test]
+    fn universe_hierarchy_collections_follow_topology_and_current_frame() {
+        let mut first = Atom::new(0, "N", [0.0, 0.0, 0.0]);
+        first.resid = 1;
+        first.resname = "ALA".into();
+        first.segid = "A".into();
+        let mut second = Atom::new(1, "CA", [1.0, 0.0, 0.0]);
+        second.resid = 1;
+        second.resname = "ALA".into();
+        second.segid = "A".into();
+        let mut third = Atom::new(2, "O", [2.0, 0.0, 0.0]);
+        third.resid = 2;
+        third.resname = "HOH".into();
+        third.segid = "B".into();
+        let mut universe = Universe::from_atoms(vec![first, second, third]);
+
+        assert_eq!(universe.residue(0).unwrap().name, "ALA");
+        assert_eq!(universe.segment(0).unwrap().id, "A");
+        assert!(universe.residue(99).is_none());
+        assert!(universe.segment(99).is_none());
+
+        let residues = universe.residues();
+        assert_eq!(residues.len(), 2);
+        assert_eq!(residues[0].atom_names(), vec!["N", "CA"]);
+        assert_eq!(residues[1].atom_names(), vec!["O"]);
+        let segments = universe.segments();
+        assert_eq!(segments.len(), 2);
+        assert_eq!(segments[0].atom_names(), vec!["N", "CA"]);
+        assert_eq!(segments[1].atom_names(), vec!["O"]);
+
+        universe
+            .add_frame(Frame::new(vec![
+                [10.0, 0.0, 0.0],
+                [11.0, 0.0, 0.0],
+                [12.0, 0.0, 0.0],
+            ]))
+            .unwrap();
+        universe.set_frame(1).unwrap();
+        assert_eq!(
+            universe.residues()[0].positions(),
+            vec![[10.0, 0.0, 0.0], [11.0, 0.0, 0.0]]
+        );
+        assert_eq!(universe.segments()[1].positions(), vec![[12.0, 0.0, 0.0]]);
     }
 
     #[test]
