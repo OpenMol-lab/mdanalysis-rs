@@ -368,6 +368,14 @@ impl Universe {
         }
         let mut frame = Frame::new(file.particles.iter().map(DmsParticle::position).collect());
         frame.dimensions = file.dimensions();
+        let velocities = file
+            .particles
+            .iter()
+            .map(DmsParticle::velocity)
+            .collect::<Vec<_>>();
+        if velocities.iter().flatten().any(|value| *value != 0.0) {
+            frame.velocities = Some(velocities);
+        }
         Ok(Self {
             topology,
             trajectory: Trajectory::new(vec![frame]),
@@ -460,6 +468,10 @@ mod tests {
         assert_eq!(
             universe.current_frame().unwrap().dimensions,
             Some(dimensions)
+        );
+        assert_eq!(
+            universe.current_frame().unwrap().velocities,
+            Some(vec![[0.1, 0.2, 0.3], [0.4, 0.5, 0.6]])
         );
         assert_eq!(universe.topology.atoms[0].segid, "SEG");
         assert_eq!(universe.topology.atoms[0].chain_id, "A");
