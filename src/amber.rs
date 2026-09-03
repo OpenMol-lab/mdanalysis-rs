@@ -299,13 +299,11 @@ fn parse_amber_top(input: &str) -> Result<AmberTopFile, AmberError> {
     } else if residue_chain_ids.is_empty() {
         vec!["SYSTEM".to_owned(); n_residues]
     } else {
-        return Err(parse_error(
-            "PRMTOP",
-            format!(
-                "RESIDUE_CHAINID contains {}; expected {n_residues}",
-                residue_chain_ids.len()
-            ),
-        ));
+        // RESIDUE_CHAINID is a non-standard optional section.  Amber files
+        // produced by older tools occasionally contain a partial list; in
+        // that case retain the topology and use the conventional SYSTEM
+        // segment rather than rejecting otherwise valid atom records.
+        vec!["SYSTEM".to_owned(); n_residues]
     };
     let atomic_numbers = sections
         .get("ATOMIC_NUMBER")
@@ -1358,5 +1356,13 @@ mod tests {
         assert_eq!(top.angles.len(), 756);
         assert_eq!(top.dihedrals.len(), 1128);
         assert_eq!(top.impropers.len(), 72);
+    }
+
+    #[test]
+    fn ignores_partial_residue_chain_id_section() {
+        let bytes = std::fs::read(fixture("ache_chainid.error5.prmtop.bz2")).unwrap();
+        let file = AmberTopFile::from_bytes(&bytes).unwrap();
+        assert_eq!(file.n_residues(), 38);
+        assert!(file.atoms.iter().all(|atom| atom.segid == "SYSTEM"));
     }
 }
