@@ -1089,6 +1089,9 @@ fn parse_inpcrd(input: &str) -> Result<InpcrdFile, AmberError> {
                 .map_err(|_| parse_error("INPCRD", "time is not a valid number"))
         })
         .transpose()?;
+    if time.is_some_and(|value| !value.is_finite()) {
+        return Err(parse_error("INPCRD", "time must be finite"));
+    }
     let rest = lines.collect::<Vec<_>>().join("\n");
     let values = rest
         .split_whitespace()
@@ -1298,6 +1301,11 @@ mod tests {
             InpcrdFile::from_str("title\n    1 1.25D+01\n 1.0D+00 -2.5d+00 3.0D-01\n").unwrap();
         assert_eq!(file.time, Some(12.5));
         assert_eq!(file.coordinates.frames[0].positions[0], [1.0, -2.5, 0.3]);
+    }
+
+    #[test]
+    fn inpcrd_rejects_nonfinite_time() {
+        assert!(InpcrdFile::from_str("title\n    1 NaN\n 1.0 2.0 3.0\n").is_err());
     }
 
     #[test]
