@@ -317,6 +317,63 @@ impl Topology {
             }
         }
     }
+
+    /// Return the residue at `index`, if it exists.
+    pub fn residue(&self, index: usize) -> Option<&Residue> {
+        self.residues.get(index)
+    }
+
+    /// Return the segment at `index`, if it exists.
+    pub fn segment(&self, index: usize) -> Option<&Segment> {
+        self.segments.get(index)
+    }
+
+    /// Return all atoms belonging to the residue at `index`.
+    ///
+    /// Atoms are returned in the same order as [`Residue::atom_indices`].
+    /// The returned group owns its atoms, so changing its coordinates does
+    /// not mutate the topology.
+    pub fn residue_atoms(&self, index: usize) -> Option<AtomGroup> {
+        let residue = self.residues.get(index)?;
+        let atoms = residue
+            .atom_indices
+            .iter()
+            .map(|&atom_index| self.atoms.get(atom_index).cloned())
+            .collect::<Option<Vec<_>>>()?;
+        Some(AtomGroup::new(atoms))
+    }
+
+    /// Return all atoms belonging to the segment at `index`.
+    ///
+    /// Atoms are grouped by residue order and retain each residue's atom
+    /// order.  An invalid hierarchy reference yields `None` rather than a
+    /// partially populated group.
+    pub fn segment_atoms(&self, index: usize) -> Option<AtomGroup> {
+        let segment = self.segments.get(index)?;
+        let atom_indices = segment
+            .residue_indices
+            .iter()
+            .map(|&residue_index| self.residues.get(residue_index))
+            .collect::<Option<Vec<_>>>()?
+            .into_iter()
+            .flat_map(|residue| residue.atom_indices.iter().copied())
+            .collect::<Vec<_>>();
+        let atoms = atom_indices
+            .iter()
+            .map(|&atom_index| self.atoms.get(atom_index).cloned())
+            .collect::<Option<Vec<_>>>()?;
+        Some(AtomGroup::new(atoms))
+    }
+
+    /// Alias for [`Topology::residue_atoms`].
+    pub fn atoms_for_residue(&self, index: usize) -> Option<AtomGroup> {
+        self.residue_atoms(index)
+    }
+
+    /// Alias for [`Topology::segment_atoms`].
+    pub fn atoms_for_segment(&self, index: usize) -> Option<AtomGroup> {
+        self.segment_atoms(index)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -1402,6 +1459,47 @@ impl Universe {
         AtomGroup::new(atoms)
     }
 
+    /// Return the residue at `index` as an atom group using the current
+    /// trajectory frame's coordinates.
+    pub fn residue_atoms(&self, index: usize) -> Option<AtomGroup> {
+        let indices = self.topology.residue(index)?.atom_indices.clone();
+        let atoms = self.atoms();
+        let selected = indices
+            .iter()
+            .map(|&atom_index| atoms.atoms.get(atom_index).cloned())
+            .collect::<Option<Vec<_>>>()?;
+        Some(AtomGroup::new(selected))
+    }
+
+    /// Return the segment at `index` as an atom group using the current
+    /// trajectory frame's coordinates.
+    pub fn segment_atoms(&self, index: usize) -> Option<AtomGroup> {
+        let residue_indices = self.topology.segment(index)?.residue_indices.clone();
+        let atom_indices = residue_indices
+            .iter()
+            .map(|&residue_index| self.topology.residue(residue_index))
+            .collect::<Option<Vec<_>>>()?
+            .into_iter()
+            .flat_map(|residue| residue.atom_indices.iter().copied())
+            .collect::<Vec<_>>();
+        let atoms = self.atoms();
+        let selected = atom_indices
+            .iter()
+            .map(|&atom_index| atoms.atoms.get(atom_index).cloned())
+            .collect::<Option<Vec<_>>>()?;
+        Some(AtomGroup::new(selected))
+    }
+
+    /// Alias for [`Universe::residue_atoms`].
+    pub fn atoms_for_residue(&self, index: usize) -> Option<AtomGroup> {
+        self.residue_atoms(index)
+    }
+
+    /// Alias for [`Universe::segment_atoms`].
+    pub fn atoms_for_segment(&self, index: usize) -> Option<AtomGroup> {
+        self.segment_atoms(index)
+    }
+
     pub fn select_atoms(&self, expression: &str) -> Result<AtomGroup, SelectionError> {
         let atoms = self.atoms();
         let bonds: Vec<(usize, usize)> = self
@@ -1581,6 +1679,7 @@ fn atom_from_pdbqt(index: usize, source: PdbqtAtom) -> Atom {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::topology_groups::TopologyGroupExt;
 
     fn sample() -> Universe {
         let mut a = Atom::new(0, "CA", [0.0, 0.0, 0.0]).with_mass(12.0);
@@ -1602,6 +1701,62 @@ mod tests {
         assert_eq!(
             universe.atoms().center_of_mass(),
             Some([0.5714285714285714, 0.0, 0.0])
+        );
+    }
+
+    #[test]
+    fn hierarchy_accessors_return_indexed_atoms_in_order() {
+        let mut first = Atom::new(0, "N", [0.0, 0.0, 0.0]);
+        first.resid = 1;
+        first.resname = "ALA".into();
+        first.segid = "A".into();
+        let mut second = Atom::new(1, "CA", [1.0, 0.0, 0.0]);
+        second.resid = 1;
+        second.resname = "ALA".into();
+        second.segid = "A".into();
+        let mut third = Atom::new(2, "C", [2.0, 0.0, 0.0]);
+        third.resid = 2;
+        third.resname = "GLY".into();
+        third.segid = "A".into();
+        let mut fourth = Atom::new(3, "O", [3.0, 0.0, 0.0]);
+        fourth.resid = 3;
+        fourth.resname = "HOH".into();
+        fourth.segid = "B".into();
+        let mut universe = Universe::from_atoms(vec![first, second, third, fourth]);
+
+        assert_eq!(universe.topology.residue(0).unwrap().resid, 1);
+        assert_eq!(universe.topology.segment(0).unwrap().id, "A");
+        assert_eq!(
+            universe.topology.residue_atoms(0).unwrap().atom_names(),
+            vec!["N", "CA"]
+        );
+        assert_eq!(
+            universe.topology.segment_atoms(0).unwrap().atom_names(),
+            vec!["N", "CA", "C"]
+        );
+        assert_eq!(
+            universe.topology.atoms_for_segment(1).unwrap().atom_names(),
+            vec!["O"]
+        );
+        assert!(universe.topology.residue_atoms(99).is_none());
+        assert!(universe.topology.segment_atoms(99).is_none());
+
+        universe
+            .add_frame(Frame::new(vec![
+                [10.0, 0.0, 0.0],
+                [11.0, 0.0, 0.0],
+                [12.0, 0.0, 0.0],
+                [13.0, 0.0, 0.0],
+            ]))
+            .unwrap();
+        universe.set_frame(1).unwrap();
+        assert_eq!(
+            universe.residue_atoms(0).unwrap().positions(),
+            vec![[10.0, 0.0, 0.0], [11.0, 0.0, 0.0]]
+        );
+        assert_eq!(
+            universe.atoms_for_segment(0).unwrap().positions(),
+            vec![[10.0, 0.0, 0.0], [11.0, 0.0, 0.0], [12.0, 0.0, 0.0]]
         );
     }
 
