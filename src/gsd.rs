@@ -194,6 +194,11 @@ impl GsdFile {
                 frame.dimensions = source.dimensions;
                 frame.step = source.step;
                 frame.time = source.time;
+                // Keep the original HOOMD step available through the common
+                // named frame-data interface as well as the typed field.
+                frame
+                    .data
+                    .insert("step".to_owned(), vec![source.step as f64]);
                 frame
             })
             .collect();
@@ -1037,6 +1042,7 @@ mod tests {
         assert_eq!(universe.n_atoms(), 5832);
         assert_eq!(universe.n_frames(), 2);
         assert_eq!(universe.trajectory.frames[1].step, 500);
+        assert_eq!(universe.trajectory.frames[1].data["step"], vec![500.0]);
     }
 
     #[test]
