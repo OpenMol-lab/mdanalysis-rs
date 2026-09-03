@@ -208,6 +208,7 @@ impl crate::core::Universe {
             .map(|(index, source)| {
                 let mut atom =
                     crate::core::Atom::new(index, source.name.clone(), first.positions[index]);
+                atom.atom_type = Some(source.name.clone());
                 atom.charge = source.atomic_charge;
                 atom.element = crate::guesser::guess_element(&source.name, None, None).ok();
                 atom.mass = crate::guesser::guess_atom_mass(&source.name);
@@ -645,6 +646,7 @@ mod tests {
         assert_eq!(universe.n_atoms(), 2);
         assert_eq!(universe.n_frames(), 2);
         assert_eq!(universe.topology.atoms[0].element.as_deref(), Some("H"));
+        assert_eq!(universe.topology.atoms[0].atom_type.as_deref(), Some("H"));
         assert_eq!(universe.topology.atoms[1].charge, 8.0);
         assert!((universe.topology.atoms[1].mass - 15.999).abs() < 1.0e-6);
     }
