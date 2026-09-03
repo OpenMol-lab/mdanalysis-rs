@@ -209,6 +209,13 @@ pub fn read_gsd(path: impl AsRef<Path>) -> Result<GsdFile, GsdError> {
     GsdFile::read_file(path)
 }
 
+impl Universe {
+    /// Construct a universe from parsed GSD data.
+    pub fn from_gsd_file(file: GsdFile) -> crate::Result<Self> {
+        file.to_universe()
+    }
+}
+
 impl CoordinateFile {
     /// Read a GSD document and return its coordinate frames.
     pub fn read_gsd<R: Read>(reader: R) -> Result<Self, GsdError> {
@@ -1026,7 +1033,7 @@ mod tests {
     #[test]
     fn universe_constructor_preserves_frames() {
         let file = read_gsd(fixture("example.gsd")).unwrap();
-        let universe = file.to_universe().unwrap();
+        let universe = Universe::from_gsd_file(file).unwrap();
         assert_eq!(universe.n_atoms(), 5832);
         assert_eq!(universe.n_frames(), 2);
         assert_eq!(universe.trajectory.frames[1].step, 500);
