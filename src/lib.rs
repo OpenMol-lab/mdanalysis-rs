@@ -35,6 +35,7 @@ pub mod topology_groups;
 pub mod tpr;
 pub mod transformations;
 pub mod trc;
+pub mod trj;
 pub mod trz;
 pub mod txyz;
 pub mod units;
@@ -116,6 +117,7 @@ pub use tpr::{
     TprTopology, read_tpr,
 };
 pub use trc::{TrcData, TrcError, TrcFile, TrcStructure, read_trc};
+pub use trj::{MdcrdFile, TrjData, TrjError, TrjFile, TrjStructure, read_trj, read_trj_with_dt};
 pub use trz::{TrzError, TrzFile, TrzHeader, TrzWriteOptions, read_trz, write_trz};
 pub use txyz::{
     ArcFile, TxyzAtom, TxyzBond, TxyzData, TxyzError, TxyzFile, TxyzStructure, read_arc, read_txyz,
@@ -150,6 +152,7 @@ pub enum Error {
     Trc(trc::TrcError),
     Tpr(tpr::TprError),
     Netcdf(netcdf::NetcdfError),
+    Trj(trj::TrjError),
     Itp(itp::ItpError),
     HoomdXml(hoomdxml::HoomdXmlError),
     Distance(DistanceError),
@@ -181,6 +184,7 @@ impl std::fmt::Display for Error {
             Self::Trc(error) => write!(f, "TRC trajectory error: {error}"),
             Self::Tpr(error) => write!(f, "TPR topology error: {error}"),
             Self::Netcdf(error) => write!(f, "NetCDF trajectory error: {error}"),
+            Self::Trj(error) => write!(f, "Amber TRJ trajectory error: {error}"),
             Self::Itp(error) => write!(f, "ITP error: {error}"),
             Self::HoomdXml(error) => write!(f, "HOOMD XML error: {error}"),
             Self::Distance(error) => write!(f, "distance error: {error}"),
@@ -280,6 +284,12 @@ impl From<tpr::TprError> for Error {
 impl From<netcdf::NetcdfError> for Error {
     fn from(error: netcdf::NetcdfError) -> Self {
         Self::Netcdf(error)
+    }
+}
+
+impl From<trj::TrjError> for Error {
+    fn from(error: trj::TrjError) -> Self {
+        Self::Trj(error)
     }
 }
 
