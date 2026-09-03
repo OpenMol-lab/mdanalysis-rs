@@ -235,18 +235,35 @@ impl PdbStructure {
         let mut cryst1 = None;
         let mut bonds = Vec::new();
         let mut previous_serial: Option<u32> = None;
+        let mut previous_residue_sequence: Option<i32> = None;
 
         for (line_index, line) in lines.into_iter().enumerate() {
             let line_number = line_index + 1;
             let record = field(line, 0, 6).trim();
             match record {
                 "ATOM" | "HETATM" => {
-                    let atom = parse_atom(
+                    let mut atom = parse_atom(
                         line,
                         line_number,
                         record == "HETATM",
                         previous_serial.map(|serial| serial.saturating_add(1)),
                     )?;
+                    if !is_xpdb_residue_line(line)
+                        && previous_residue_sequence.is_some_and(|previous| {
+                            atom.residue_sequence
+                                .checked_sub(previous)
+                                .is_some_and(|difference| difference < -5000)
+                        })
+                    {
+                        atom.residue_sequence = atom
+                            .residue_sequence
+                            .checked_add(10000)
+                            .ok_or_else(|| PdbError::Parse {
+                                line: line_number,
+                                message: "wrapped residue sequence overflows i32".to_owned(),
+                            })?;
+                    }
+                    previous_residue_sequence = Some(atom.residue_sequence);
                     previous_serial = Some(atom.serial);
                     if let Some(current) = model_atoms.as_mut() {
                         current.push(atom);
@@ -268,6 +285,7 @@ impl PdbStructure {
                     }
                     saw_model = true;
                     previous_serial = None;
+                    previous_residue_sequence = None;
                     model_atoms = Some(Vec::new());
                 }
                 "ENDMDL" => {
@@ -377,10 +395,8 @@ fn parse_atom(
     // Extended PDB (XPDB) files permit five-digit residue numbers.  The
     // fifth character occupies the insertion-code column, but is numeric in
     // that format; retain it instead of silently truncating the residue ID.
-    let standard_residue = field(line, 22, 26);
     let extended_residue = field(line, 22, 27);
-    let is_xpdb_residue = extended_residue.trim().len() > standard_residue.trim().len()
-        && extended_residue.trim().parse::<i32>().is_ok();
+    let is_xpdb_residue = is_xpdb_residue_line(line);
     let residue_sequence = if is_xpdb_residue {
         extended_residue
             .trim()
@@ -423,6 +439,13 @@ fn parse_atom(
         charge,
         hetatm,
     })
+}
+
+fn is_xpdb_residue_line(line: &str) -> bool {
+    let standard_residue = field(line, 22, 26);
+    let extended_residue = field(line, 22, 27);
+    extended_residue.trim().len() > standard_residue.trim().len()
+        && extended_residue.trim().parse::<i32>().is_ok()
 }
 
 fn parse_cryst1(line: &str, line_number: usize) -> Result<PdbCryst1, PdbError> {
@@ -917,6 +940,31 @@ mod tests {
         assert_eq!(structure.atoms[4].insertion_code, None);
         assert_eq!(structure.atoms[4].element, None);
         assert_eq!(structure.frames.len(), 1);
+    }
+
+    #[test]
+    fn restores_wrapped_standard_residue_sequences() {
+        let mut first =
+            "ATOM      1  CA  GLY A   1      1.000   2.000   3.000  1.00 10.00           C  "
+                .to_owned();
+        first.replace_range(22..26, "9999");
+        let mut second = first.clone();
+        second.replace_range(6..11, "    2");
+        second.replace_range(22..26, "   0");
+        let mut third = second.clone();
+        third.replace_range(6..11, "    3");
+        third.replace_range(22..26, "   1");
+        let input = format!("{first}\n{second}\n{third}\nEND\n");
+
+        let structure = PdbStructure::from_str(&input).expect("valid wrapped PDB");
+        assert_eq!(
+            structure
+                .atoms
+                .iter()
+                .map(|atom| atom.residue_sequence)
+                .collect::<Vec<_>>(),
+            vec![9999, 10000, 10001]
+        );
     }
 
     #[test]
