@@ -13,7 +13,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::fs::File;
 use std::io::{self, Read, Write};
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tng_rs::data::DataType;
 use tng_rs::gen_block::BlockID;
@@ -25,6 +27,8 @@ const SPECIAL_BLOCKS: [BlockID; 4] = [
     BlockID::TrajVelocities,
     BlockID::TrajForces,
 ];
+
+static TEMP_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 /// Parsed TNG trajectory data, with values converted to MDAnalysis base units.
 #[derive(Clone, Debug, PartialEq)]
@@ -91,6 +95,13 @@ impl TngFile {
         Self::read_file(path)
     }
 
+    /// Parse a TNG trajectory from any reader.
+    pub fn read<R: Read>(mut reader: R) -> Result<Self, TngError> {
+        let mut bytes = Vec::new();
+        reader.read_to_end(&mut bytes)?;
+        Self::from_bytes(&bytes)
+    }
+
     pub fn read_file_unconverted(path: impl AsRef<Path>) -> Result<Self, TngError> {
         Self::read_file_with_options(path, false)
     }
@@ -100,10 +111,14 @@ impl TngFile {
         convert_units: bool,
     ) -> Result<Self, TngError> {
         let path = path.as_ref();
+        validate_path(path)?;
         File::open(path)?;
-        let mut trajectory = TngTrajectory::new();
-        trajectory.util_trajectory_open(path, 'r')?;
-        parse_trajectory(&mut trajectory, convert_units)
+        catch_unwind(AssertUnwindSafe(|| {
+            let mut trajectory = TngTrajectory::new();
+            trajectory.util_trajectory_open(path, 'r')?;
+            parse_trajectory(&mut trajectory, convert_units)
+        }))
+        .map_err(|payload| TngError::Tng(panic_message(payload)))?
     }
 
     /// Parse a TNG document supplied in memory.  `tng-rs` is path based, so a
@@ -121,18 +136,25 @@ impl TngFile {
             .duration_since(UNIX_EPOCH)
             .map_err(|error| TngError::InvalidStructure(format!("system clock error: {error}")))?
             .as_nanos();
-        let path =
-            std::env::temp_dir().join(format!("mdanalysis-rs-{}-{stamp}.tng", std::process::id()));
+        let counter = TEMP_FILE_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!(
+            "mdanalysis-rs-{}-{stamp}-{counter}.tng",
+            std::process::id()
+        ));
+        let mut created = false;
         let result = (|| {
             let mut file = std::fs::OpenOptions::new()
                 .write(true)
                 .create_new(true)
                 .open(&path)?;
+            created = true;
             file.write_all(bytes)?;
             drop(file);
             Self::read_file_with_options(&path, convert_units)
         })();
-        let _ = std::fs::remove_file(&path);
+        if created {
+            let _ = std::fs::remove_file(&path);
+        }
         result
     }
 
@@ -150,6 +172,32 @@ impl TngFile {
 
     pub fn to_universe(&self) -> crate::Result<Universe> {
         universe_from_tng(self.clone())
+    }
+}
+
+fn validate_path(path: &Path) -> Result<(), TngError> {
+    let Some(path_string) = path.to_str() else {
+        return Err(TngError::InvalidStructure(
+            "TNG paths must be valid UTF-8".to_owned(),
+        ));
+    };
+    // tng-rs stores paths in a fixed 1024-byte C buffer and truncates longer
+    // paths, which would otherwise make it open a different file.
+    if path_string.len() >= 1024 {
+        return Err(TngError::InvalidStructure(
+            "TNG path exceeds the 1023-byte reader limit".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn panic_message(payload: Box<dyn std::any::Any + Send>) -> String {
+    if let Some(message) = payload.downcast_ref::<&str>() {
+        (*message).to_owned()
+    } else if let Some(message) = payload.downcast_ref::<String>() {
+        message.clone()
+    } else {
+        "TNG reader panicked while parsing the file".to_owned()
     }
 }
 
@@ -172,6 +220,10 @@ impl CoordinateFile {
 impl Universe {
     pub fn from_tng(path: impl AsRef<Path>) -> crate::Result<Self> {
         TngFile::read_file(path)?.to_universe()
+    }
+
+    pub fn from_tng_bytes(bytes: &[u8]) -> crate::Result<Self> {
+        TngFile::from_bytes(bytes)?.to_universe()
     }
 
     pub fn from_tng_file(file: TngFile) -> crate::Result<Self> {
@@ -868,5 +920,10 @@ mod tests {
     fn rejects_uneven_special_blocks() {
         let error = read_tng(fixture("argon_npt_compressed_uneven.tng")).unwrap_err();
         assert!(error.to_string().contains("special block"));
+    }
+
+    #[test]
+    fn malformed_bytes_return_an_error() {
+        assert!(TngFile::from_bytes(&[]).is_err());
     }
 }
