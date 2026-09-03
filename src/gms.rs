@@ -684,4 +684,23 @@ mod tests {
         let bzip = encoder.finish().unwrap();
         assert_eq!(GmsFile::from_bytes(&bzip).unwrap().n_atoms, 6);
     }
+
+    #[test]
+    fn parses_upstream_optimization_and_surface_fixtures() {
+        let asymmetric = GmsFile::read_file(fixture("c1opt.gms.gz")).unwrap();
+        assert_eq!(asymmetric.n_atoms, 6);
+        assert_eq!(asymmetric.n_frames(), 21);
+        assert_eq!(asymmetric.atoms[0].name, "O");
+        assert_eq!(asymmetric.atoms[0].atomic_charge, 8.0);
+
+        let symmetric = GmsFile::read_file(fixture("symopt.gms")).unwrap();
+        assert_eq!(symmetric.n_atoms, 4);
+        assert_eq!(symmetric.n_frames(), 8);
+        assert_eq!(symmetric.atoms[0].name, "CARBON");
+
+        let surface = GmsFile::read_file(fixture("surf2wat.gms")).unwrap();
+        assert_eq!(surface.runtyp, "surface");
+        assert_eq!(surface.n_atoms, 6);
+        assert_eq!(surface.n_frames(), 10);
+    }
 }
