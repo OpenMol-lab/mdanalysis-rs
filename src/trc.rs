@@ -369,6 +369,13 @@ fn parse_trc(text: &str) -> Result<TrcFile, TrcError> {
                 saw_supported_block = true;
                 line_index = next;
             }
+            "POSITION" => {
+                let (_, next) = read_block(&lines, line_index + 1)?;
+                // POSITION contains annotated coordinates which the native
+                // GROMOS reader intentionally does not use. Skip it as a
+                // whole block so following POSITIONRED frames remain aligned.
+                line_index = next;
+            }
             "GENBOX" => {
                 let (content, next) = read_block(&lines, line_index + 1)?;
                 pending.dimensions = parse_genbox(&content, current_line)?;
@@ -635,5 +642,15 @@ mod tests {
         let compressed = encoder.finish().unwrap();
         assert_eq!(TrcFile::from_bytes(&compressed).unwrap().n_frames(), 3);
         assert!(TrcFile::read_files::<Vec<PathBuf>, PathBuf>(Vec::new()).is_err());
+    }
+
+    #[test]
+    fn reads_cluster_position_blocks_without_timestep_metadata() {
+        let file = read_trc(fixture("gromos11_cluster_vac.trj.gz")).unwrap();
+        assert_eq!(file.n_atoms(), 73);
+        assert_eq!(file.n_frames(), 3);
+        assert_eq!(file.coordinates.frames[0].step, 0);
+        assert_eq!(file.coordinates.frames[2].time, 0.0);
+        assert!((file.coordinates.frames[0].positions[0][0] - 2.373409727).abs() < 1.0e-9);
     }
 }
