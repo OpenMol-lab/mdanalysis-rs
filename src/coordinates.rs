@@ -108,6 +108,28 @@ impl CoordinateFile {
         self.frames.len()
     }
 
+    /// Alias for [`CoordinateFile::n_frames`] matching collection terminology.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.frames.len()
+    }
+
+    /// Return whether this coordinate file contains no frames.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.frames.is_empty()
+    }
+
+    /// Iterate over coordinate frames.
+    pub fn iter(&self) -> std::slice::Iter<'_, CoordinateFrame> {
+        self.frames.iter()
+    }
+
+    /// Mutably iterate over coordinate frames.
+    pub fn iter_mut(&mut self) -> std::slice::IterMut<'_, CoordinateFrame> {
+        self.frames.iter_mut()
+    }
+
     /// Number of atoms, or zero for an empty file.
     #[must_use]
     pub fn n_atoms(&self) -> usize {
@@ -166,6 +188,47 @@ impl CoordinateFile {
         let mut output = Vec::new();
         self.write_gro(&mut output)?;
         Ok(String::from_utf8_lossy(&output).into_owned())
+    }
+}
+
+impl<'a> IntoIterator for &'a CoordinateFile {
+    type Item = &'a CoordinateFrame;
+    type IntoIter = std::slice::Iter<'a, CoordinateFrame>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.frames.iter()
+    }
+}
+
+impl<'a> IntoIterator for &'a mut CoordinateFile {
+    type Item = &'a mut CoordinateFrame;
+    type IntoIter = std::slice::IterMut<'a, CoordinateFrame>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.frames.iter_mut()
+    }
+}
+
+impl IntoIterator for CoordinateFile {
+    type Item = CoordinateFrame;
+    type IntoIter = std::vec::IntoIter<CoordinateFrame>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.frames.into_iter()
+    }
+}
+
+impl std::ops::Index<usize> for CoordinateFile {
+    type Output = CoordinateFrame;
+
+    fn index(&self, index: usize) -> &Self::Output {
+        &self.frames[index]
+    }
+}
+
+impl std::ops::IndexMut<usize> for CoordinateFile {
+    fn index_mut(&mut self, index: usize) -> &mut Self::Output {
+        &mut self.frames[index]
     }
 }
 
@@ -913,5 +976,19 @@ mod tests {
             zero_based_ids,
             vec![0, 99_999, 100_000, 100_001, 199_999, 200_000, 200_001]
         );
+    }
+
+    #[test]
+    fn coordinate_file_supports_indexing_and_iteration() {
+        let mut file = CoordinateFile::new(vec![
+            CoordinateFrame::new(vec![[1.0, 0.0, 0.0]]),
+            CoordinateFrame::new(vec![[2.0, 0.0, 0.0]]),
+        ]);
+        assert_eq!(file.len(), 2);
+        assert!(!file.is_empty());
+        assert_eq!(file[1].positions[0][0], 2.0);
+        file[1].positions[0][0] = 3.0;
+        assert_eq!(file.iter().count(), 2);
+        assert_eq!(file.into_iter().count(), 2);
     }
 }

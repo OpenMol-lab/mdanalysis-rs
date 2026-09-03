@@ -433,6 +433,28 @@ impl Trajectory {
         self.frames.len()
     }
 
+    /// Alias for [`Trajectory::n_frames`] matching collection terminology.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.frames.len()
+    }
+
+    /// Return whether this trajectory contains no frames.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.frames.is_empty()
+    }
+
+    /// Iterate over frames without changing the current-frame cursor.
+    pub fn iter(&self) -> std::slice::Iter<'_, Frame> {
+        self.frames.iter()
+    }
+
+    /// Mutably iterate over frames without changing the current-frame cursor.
+    pub fn iter_mut(&mut self) -> std::slice::IterMut<'_, Frame> {
+        self.frames.iter_mut()
+    }
+
     /// Number of atoms represented by each frame, or zero for an empty
     /// trajectory.
     pub fn n_atoms(&self) -> usize {
@@ -490,6 +512,20 @@ impl IntoIterator for Trajectory {
 
     fn into_iter(self) -> Self::IntoIter {
         self.frames.into_iter()
+    }
+}
+
+impl std::ops::Index<usize> for Trajectory {
+    type Output = Frame;
+
+    fn index(&self, index: usize) -> &Self::Output {
+        &self.frames[index]
+    }
+}
+
+impl std::ops::IndexMut<usize> for Trajectory {
+    fn index_mut(&mut self, index: usize) -> &mut Self::Output {
+        &mut self.frames[index]
     }
 }
 
@@ -2428,5 +2464,21 @@ mod tests {
         assert!(universe.next().is_none());
         universe.rewind();
         assert_eq!(universe.current_frame().unwrap().positions[0][0], 0.0);
+    }
+
+    #[test]
+    fn trajectory_supports_collection_access_without_changing_cursor() {
+        let mut trajectory = Trajectory::new(vec![
+            Frame::new(vec![[1.0, 0.0, 0.0]]),
+            Frame::new(vec![[2.0, 0.0, 0.0]]),
+        ]);
+        assert_eq!(trajectory.len(), 2);
+        assert!(!trajectory.is_empty());
+        assert_eq!(trajectory[1].positions[0][0], 2.0);
+        trajectory[1].positions[0][0] = 3.0;
+        assert_eq!(trajectory.iter().count(), 2);
+        assert_eq!(trajectory.current_frame().unwrap().positions[0][0], 1.0);
+        assert_eq!(trajectory.next().unwrap().positions[0][0], 1.0);
+        assert_eq!(trajectory[1].positions[0][0], 3.0);
     }
 }
