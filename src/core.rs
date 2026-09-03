@@ -425,6 +425,12 @@ impl Trajectory {
         self.frames.len()
     }
 
+    /// Number of atoms represented by each frame, or zero for an empty
+    /// trajectory.
+    pub fn n_atoms(&self) -> usize {
+        self.frames.first().map_or(0, Frame::n_atoms)
+    }
+
     pub fn frame(&self, index: usize) -> Option<&Frame> {
         self.frames.get(index)
     }
@@ -499,6 +505,16 @@ impl AtomGroup {
 
     pub fn positions(&self) -> Vec<[f64; 3]> {
         self.atoms.iter().map(|atom| atom.position).collect()
+    }
+
+    /// Return per-atom velocities when every atom has velocity data.
+    pub fn velocities(&self) -> Option<Vec<[f64; 3]>> {
+        self.atoms.iter().map(|atom| atom.velocity).collect()
+    }
+
+    /// Return per-atom forces when every atom has force data.
+    pub fn forces(&self) -> Option<Vec<[f64; 3]>> {
+        self.atoms.iter().map(|atom| atom.force).collect()
     }
 
     pub fn masses(&self) -> Vec<f64> {
@@ -1489,10 +1505,25 @@ impl Universe {
     }
 
     pub fn atoms(&self) -> AtomGroup {
-        let positions = self.positions();
+        let frame = self.current_frame();
         let mut atoms = self.topology.atoms.clone();
-        for (atom, position) in atoms.iter_mut().zip(positions) {
-            atom.position = position;
+        for (index, atom) in atoms.iter_mut().enumerate() {
+            if let Some(frame) = frame {
+                if let Some(position) = frame.positions.get(index) {
+                    atom.position = *position;
+                }
+                atom.velocity = frame
+                    .velocities
+                    .as_ref()
+                    .and_then(|values| values.get(index).copied());
+                atom.force = frame
+                    .forces
+                    .as_ref()
+                    .and_then(|values| values.get(index).copied());
+            } else {
+                atom.velocity = None;
+                atom.force = None;
+            }
         }
         AtomGroup::new(atoms)
     }
@@ -1621,6 +1652,22 @@ impl Universe {
         } else {
             self.trajectory.frames.get(self.trajectory.current - 1)
         }
+    }
+
+    /// Reset trajectory iteration to its first frame.
+    pub fn rewind(&mut self) {
+        self.trajectory.rewind();
+    }
+
+    /// Return the next trajectory frame.
+    #[allow(clippy::should_implement_trait)]
+    pub fn next(&mut self) -> Option<&Frame> {
+        self.trajectory.next_frame()
+    }
+
+    /// Alias for [`Universe::next`].
+    pub fn next_frame(&mut self) -> Option<&Frame> {
+        self.next()
     }
 
     pub fn set_frame(&mut self, index: usize) -> crate::Result<()> {
@@ -2174,5 +2221,39 @@ mod tests {
         assert!(trajectory.next().is_none());
         trajectory.rewind();
         assert_eq!(trajectory.current_frame().unwrap().positions[0][0], 1.0);
+    }
+
+    #[test]
+    fn universe_atoms_include_current_frame_velocities_and_forces() {
+        let mut universe = Universe::from_atoms(vec![
+            Atom::new(0, "N", [0.0, 0.0, 0.0]),
+            Atom::new(1, "CA", [1.0, 0.0, 0.0]),
+        ]);
+        let mut frame = Frame::new(vec![[5.0, 0.0, 0.0], [6.0, 0.0, 0.0]]);
+        frame.velocities = Some(vec![[0.1, 0.2, 0.3], [0.4, 0.5, 0.6]]);
+        frame.forces = Some(vec![[1.0, 1.1, 1.2], [1.3, 1.4, 1.5]]);
+        universe.trajectory = Trajectory::new(vec![frame]);
+
+        let atoms = universe.atoms();
+        assert_eq!(atoms.positions(), vec![[5.0, 0.0, 0.0], [6.0, 0.0, 0.0]]);
+        assert_eq!(
+            atoms.velocities(),
+            Some(vec![[0.1, 0.2, 0.3], [0.4, 0.5, 0.6]])
+        );
+        assert_eq!(atoms.forces(), Some(vec![[1.0, 1.1, 1.2], [1.3, 1.4, 1.5]]));
+    }
+
+    #[test]
+    fn trajectory_reports_atom_count_and_universe_iteration_aliases() {
+        let mut universe = Universe::from_atoms(vec![Atom::new(0, "X", [0.0, 0.0, 0.0])]);
+        universe
+            .add_frame(Frame::new(vec![[1.0, 0.0, 0.0]]))
+            .unwrap();
+        assert_eq!(universe.trajectory.n_atoms(), 1);
+        assert_eq!(universe.next().unwrap().positions[0][0], 0.0);
+        assert_eq!(universe.next_frame().unwrap().positions[0][0], 1.0);
+        assert!(universe.next().is_none());
+        universe.rewind();
+        assert_eq!(universe.current_frame().unwrap().positions[0][0], 0.0);
     }
 }
