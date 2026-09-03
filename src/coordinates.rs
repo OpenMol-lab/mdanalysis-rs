@@ -10,7 +10,7 @@
 use std::fmt;
 use std::fs::File;
 use std::io::{self, BufReader, Read, Write};
-use std::ops::{Bound, Index, IndexMut, RangeBounds};
+use std::ops::{Bound, Deref, DerefMut, RangeBounds};
 use std::path::Path;
 
 /// A single coordinate frame.
@@ -83,6 +83,11 @@ impl CoordinateFrame {
         self.positions.get(index)
     }
 
+    /// Return one atom coordinate for in-place modification.
+    pub fn get_mut(&mut self, index: usize) -> Option<&mut [f64; 3]> {
+        self.positions.get_mut(index)
+    }
+
     /// Iterate over atom coordinates in file order.
     pub fn iter(&self) -> std::slice::Iter<'_, [f64; 3]> {
         self.positions.iter()
@@ -91,6 +96,16 @@ impl CoordinateFrame {
     /// Mutably iterate over atom coordinates in file order.
     pub fn iter_mut(&mut self) -> std::slice::IterMut<'_, [f64; 3]> {
         self.positions.iter_mut()
+    }
+
+    /// Return the coordinates for in-place modification.
+    pub fn positions_mut(&mut self) -> &mut [[f64; 3]] {
+        self.positions.as_mut_slice()
+    }
+
+    /// Return frame velocities for in-place modification when present.
+    pub fn velocities_mut(&mut self) -> Option<&mut [[f64; 3]]> {
+        self.velocities.as_deref_mut()
     }
 
     /// Return a coordinate subset while retaining frame-level metadata.
@@ -159,6 +174,23 @@ impl<T> OptionalVecLength for Vec<T> {
     }
 }
 
+fn normalize_range<R>(range: R, length: usize) -> (usize, usize)
+where
+    R: RangeBounds<usize>,
+{
+    let start = match range.start_bound() {
+        Bound::Included(&value) => value,
+        Bound::Excluded(&value) => value.checked_add(1).expect("slice start overflow"),
+        Bound::Unbounded => 0,
+    };
+    let end = match range.end_bound() {
+        Bound::Included(&value) => value.checked_add(1).expect("slice end overflow"),
+        Bound::Excluded(&value) => value,
+        Bound::Unbounded => length,
+    };
+    (start, end)
+}
+
 fn slice_metadata<T: Clone>(values: &[T], start: usize, end: usize, total: usize) -> Vec<T> {
     if values.is_empty() || values.len() != total {
         Vec::new()
@@ -220,6 +252,33 @@ impl CoordinateFile {
         self.frames.get(index)
     }
 
+    /// Return one frame by zero-based index mutably.
+    pub fn frame_mut(&mut self, index: usize) -> Option<&mut CoordinateFrame> {
+        self.frames.get_mut(index)
+    }
+
+    /// Alias for [`CoordinateFile::frame`].
+    #[must_use]
+    pub fn get(&self, index: usize) -> Option<&CoordinateFrame> {
+        self.frame(index)
+    }
+
+    /// Return one frame by zero-based index mutably.
+    pub fn get_mut(&mut self, index: usize) -> Option<&mut CoordinateFrame> {
+        self.frame_mut(index)
+    }
+
+    /// Copy a contiguous range of frames while retaining each frame's
+    /// coordinate and format metadata.
+    #[must_use]
+    pub fn slice<R>(&self, range: R) -> Self
+    where
+        R: RangeBounds<usize>,
+    {
+        let (start, end) = normalize_range(range, self.frames.len());
+        Self::new(self.frames[start..end].to_vec())
+    }
+
     /// Parse an XYZ document from a reader.
     pub fn read_xyz<R: Read>(reader: R) -> Result<Self, CoordinateError> {
         let mut input = String::new();
@@ -274,7 +333,7 @@ impl<'a> IntoIterator for &'a CoordinateFile {
     type IntoIter = std::slice::Iter<'a, CoordinateFrame>;
 
     fn into_iter(self) -> Self::IntoIter {
-        self.frames.iter()
+        self.iter()
     }
 }
 
@@ -283,7 +342,7 @@ impl<'a> IntoIterator for &'a mut CoordinateFile {
     type IntoIter = std::slice::IterMut<'a, CoordinateFrame>;
 
     fn into_iter(self) -> Self::IntoIter {
-        self.frames.iter_mut()
+        self.iter_mut()
     }
 }
 
@@ -293,28 +352,6 @@ impl IntoIterator for CoordinateFile {
 
     fn into_iter(self) -> Self::IntoIter {
         self.frames.into_iter()
-    }
-}
-
-impl std::ops::Index<usize> for CoordinateFile {
-    type Output = CoordinateFrame;
-
-    fn index(&self, index: usize) -> &Self::Output {
-        &self.frames[index]
-    }
-}
-
-impl Index<usize> for CoordinateFrame {
-    type Output = [f64; 3];
-
-    fn index(&self, index: usize) -> &Self::Output {
-        &self.positions[index]
-    }
-}
-
-impl IndexMut<usize> for CoordinateFrame {
-    fn index_mut(&mut self, index: usize) -> &mut Self::Output {
-        &mut self.positions[index]
     }
 }
 
@@ -359,9 +396,17 @@ impl IntoIterator for CoordinateFrame {
     }
 }
 
-impl std::ops::IndexMut<usize> for CoordinateFile {
-    fn index_mut(&mut self, index: usize) -> &mut Self::Output {
-        &mut self.frames[index]
+impl Deref for CoordinateFile {
+    type Target = [CoordinateFrame];
+
+    fn deref(&self) -> &Self::Target {
+        &self.frames
+    }
+}
+
+impl DerefMut for CoordinateFile {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.frames
     }
 }
 
@@ -1123,6 +1168,35 @@ mod tests {
         file[1].positions[0][0] = 3.0;
         assert_eq!(file.iter().count(), 2);
         assert_eq!(file.into_iter().count(), 2);
+    }
+
+    #[test]
+    fn coordinate_file_supports_mutation_and_metadata_preserving_slices() {
+        let mut first = CoordinateFrame::new(vec![[1.0, 0.0, 0.0]]);
+        first.step = 10;
+        first.time = 1.5;
+        first.dimensions = Some([10.0, 11.0, 12.0, 90.0, 90.0, 90.0]);
+        let mut second = CoordinateFrame::new(vec![[2.0, 0.0, 0.0]]);
+        second.step = 20;
+        second.time = 2.5;
+        let mut file = CoordinateFile::new(vec![first, second]);
+
+        file.frame_mut(1).unwrap().positions_mut()[0][0] = 3.0;
+        assert_eq!(file.get(1).unwrap().positions[0][0], 3.0);
+        for frame in &mut file {
+            frame.positions_mut()[0][1] = 4.0;
+        }
+        assert_eq!(file[0].positions[0], [1.0, 4.0, 0.0]);
+
+        let sliced = file.slice(..=0);
+        assert_eq!(sliced.len(), 1);
+        assert_eq!(sliced[0].step, 10);
+        assert_eq!(sliced[0].time, 1.5);
+        assert_eq!(
+            sliced[0].dimensions,
+            Some([10.0, 11.0, 12.0, 90.0, 90.0, 90.0])
+        );
+        assert_eq!(file[0..1].len(), 1);
     }
 
     #[test]

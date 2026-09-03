@@ -13,7 +13,7 @@ use crate::selection::{
 };
 use crate::xdr::{TrrFile, XtcFile, read_trr, read_xtc};
 use std::collections::BTreeMap;
-use std::ops::{Bound, Index, IndexMut, RangeBounds};
+use std::ops::{Bound, Deref, DerefMut, Index, IndexMut, RangeBounds};
 use std::path::Path;
 
 /// A single atom and its topology metadata.
@@ -449,6 +449,11 @@ impl Frame {
         self.positions.get(index)
     }
 
+    /// Return the position of the atom at `index` for in-place modification.
+    pub fn get_mut(&mut self, index: usize) -> Option<&mut [f64; 3]> {
+        self.positions.get_mut(index)
+    }
+
     /// Iterate over atom positions without changing the frame metadata.
     pub fn iter(&self) -> std::slice::Iter<'_, [f64; 3]> {
         self.positions.iter()
@@ -457,6 +462,21 @@ impl Frame {
     /// Mutably iterate over atom positions without changing the frame metadata.
     pub fn iter_mut(&mut self) -> std::slice::IterMut<'_, [f64; 3]> {
         self.positions.iter_mut()
+    }
+
+    /// Return the coordinates for in-place modification.
+    pub fn positions_mut(&mut self) -> &mut [[f64; 3]] {
+        self.positions.as_mut_slice()
+    }
+
+    /// Return frame velocities for in-place modification when present.
+    pub fn velocities_mut(&mut self) -> Option<&mut [[f64; 3]]> {
+        self.velocities.as_deref_mut()
+    }
+
+    /// Return frame forces for in-place modification when present.
+    pub fn forces_mut(&mut self) -> Option<&mut [[f64; 3]]> {
+        self.forces.as_deref_mut()
     }
 
     /// Copy a contiguous atom range, retaining frame-level metadata.
@@ -522,17 +542,17 @@ impl IntoIterator for Frame {
     }
 }
 
-impl std::ops::Index<usize> for Frame {
-    type Output = [f64; 3];
+impl Deref for Frame {
+    type Target = [[f64; 3]];
 
-    fn index(&self, index: usize) -> &Self::Output {
-        &self.positions[index]
+    fn deref(&self) -> &Self::Target {
+        &self.positions
     }
 }
 
-impl std::ops::IndexMut<usize> for Frame {
-    fn index_mut(&mut self, index: usize) -> &mut Self::Output {
-        &mut self.positions[index]
+impl DerefMut for Frame {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.positions
     }
 }
 
@@ -593,6 +613,23 @@ impl Trajectory {
         }
     }
 
+    /// Return the zero-based index of the currently selected frame.
+    #[must_use]
+    pub fn current_index(&self) -> Option<usize> {
+        if self.frames.is_empty() {
+            None
+        } else {
+            let index = self.current.saturating_sub(1);
+            self.frames.get(index).map(|_| index)
+        }
+    }
+
+    /// Alias for [`Trajectory::current_index`].
+    #[must_use]
+    pub fn current_frame_index(&self) -> Option<usize> {
+        self.current_index()
+    }
+
     /// Return the frame most recently yielded by [`Self::next`] mutably.
     /// Before any advancement, this is the first frame when one exists.
     pub fn current_frame_mut(&mut self) -> Option<&mut Frame> {
@@ -604,10 +641,37 @@ impl Trajectory {
         self.frames.get_mut(index)
     }
 
+    /// Return a frame by signed index, accepting Python-style negative values.
+    #[must_use]
+    pub fn get_signed(&self, index: isize) -> Option<&Frame> {
+        let index = if index < 0 {
+            self.frames.len().checked_sub(index.unsigned_abs())?
+        } else {
+            usize::try_from(index).ok()?
+        };
+        self.frame(index)
+    }
+
+    /// Return a frame by signed index mutably, accepting Python-style negative
+    /// values.
+    pub fn get_signed_mut(&mut self, index: isize) -> Option<&mut Frame> {
+        let index = if index < 0 {
+            self.frames.len().checked_sub(index.unsigned_abs())?
+        } else {
+            usize::try_from(index).ok()?
+        };
+        self.frame_mut(index)
+    }
+
     /// Return a frame by zero-based index.
     #[must_use]
     pub fn get(&self, index: usize) -> Option<&Frame> {
         self.frame(index)
+    }
+
+    /// Return a frame by zero-based index mutably.
+    pub fn get_mut(&mut self, index: usize) -> Option<&mut Frame> {
+        self.frame_mut(index)
     }
 
     /// Copy a contiguous range of frames and reset the new cursor.
@@ -618,6 +682,95 @@ impl Trajectory {
     {
         let (start, end) = normalize_range(range, self.frames.len());
         Self::new(self.frames[start..end].to_vec())
+    }
+
+    /// Select a frame by zero-based index and make it the current frame.
+    pub fn set_frame(&mut self, index: usize) -> crate::Result<()> {
+        if index >= self.frames.len() {
+            return Err(crate::Error::InvalidInput(format!(
+                "frame index {index} is out of bounds for {} frames",
+                self.frames.len()
+            )));
+        }
+        self.current = index + 1;
+        Ok(())
+    }
+
+    /// Select a frame by signed index, accepting Python-style negative values.
+    pub fn set_frame_signed(&mut self, index: isize) -> crate::Result<()> {
+        let index = if index < 0 {
+            self.frames
+                .len()
+                .checked_sub(index.unsigned_abs())
+                .ok_or_else(|| {
+                    crate::Error::InvalidInput(format!(
+                        "frame index {index} is out of bounds for {} frames",
+                        self.frames.len()
+                    ))
+                })?
+        } else {
+            usize::try_from(index).map_err(|_| {
+                crate::Error::InvalidInput(format!(
+                    "frame index {index} is out of bounds for {} frames",
+                    self.frames.len()
+                ))
+            })?
+        };
+        self.set_frame(index)
+    }
+
+    /// Return the selected frame's simulation time.
+    #[must_use]
+    pub fn time(&self) -> Option<f64> {
+        self.current_frame().map(|frame| frame.time)
+    }
+
+    /// Return the selected frame's simulation step.
+    #[must_use]
+    pub fn step(&self) -> Option<usize> {
+        self.current_frame().map(|frame| frame.step)
+    }
+
+    /// Return the selected frame's unit-cell dimensions.
+    #[must_use]
+    pub fn dimensions(&self) -> Option<[f64; 6]> {
+        self.current_frame().and_then(|frame| frame.dimensions)
+    }
+
+    /// Copy the selected frame's coordinates.
+    #[must_use]
+    pub fn positions(&self) -> Vec<[f64; 3]> {
+        self.current_frame()
+            .map(|frame| frame.positions.clone())
+            .unwrap_or_default()
+    }
+
+    /// Copy the selected frame's velocities when present.
+    #[must_use]
+    pub fn velocities(&self) -> Option<Vec<[f64; 3]>> {
+        self.current_frame()
+            .and_then(|frame| frame.velocities.clone())
+    }
+
+    /// Copy the selected frame's forces when present.
+    #[must_use]
+    pub fn forces(&self) -> Option<Vec<[f64; 3]>> {
+        self.current_frame().and_then(|frame| frame.forces.clone())
+    }
+
+    /// Return the selected coordinates for in-place modification.
+    pub fn positions_mut(&mut self) -> Option<&mut [[f64; 3]]> {
+        self.current_frame_mut().map(Frame::positions_mut)
+    }
+
+    /// Return selected frame velocities for in-place modification when present.
+    pub fn velocities_mut(&mut self) -> Option<&mut [[f64; 3]]> {
+        self.current_frame_mut().and_then(Frame::velocities_mut)
+    }
+
+    /// Return selected frame forces for in-place modification when present.
+    pub fn forces_mut(&mut self) -> Option<&mut [[f64; 3]]> {
+        self.current_frame_mut().and_then(Frame::forces_mut)
     }
 
     pub fn rewind(&mut self) {
@@ -647,6 +800,15 @@ impl<'a> IntoIterator for &'a Trajectory {
     }
 }
 
+impl<'a> IntoIterator for &'a mut Trajectory {
+    type Item = &'a mut Frame;
+    type IntoIter = std::slice::IterMut<'a, Frame>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter_mut()
+    }
+}
+
 impl IntoIterator for Trajectory {
     type Item = Frame;
     type IntoIter = std::vec::IntoIter<Frame>;
@@ -656,17 +818,17 @@ impl IntoIterator for Trajectory {
     }
 }
 
-impl std::ops::Index<usize> for Trajectory {
-    type Output = Frame;
+impl Deref for Trajectory {
+    type Target = [Frame];
 
-    fn index(&self, index: usize) -> &Self::Output {
-        &self.frames[index]
+    fn deref(&self) -> &Self::Target {
+        &self.frames
     }
 }
 
-impl std::ops::IndexMut<usize> for Trajectory {
-    fn index_mut(&mut self, index: usize) -> &mut Self::Output {
-        &mut self.frames[index]
+impl DerefMut for Trajectory {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.frames
     }
 }
 
@@ -796,6 +958,11 @@ impl AtomGroup {
 
     pub fn get(&self, index: usize) -> Option<&Atom> {
         self.atoms.get(index)
+    }
+
+    /// Return an atom by zero-based index for in-place modification.
+    pub fn get_mut(&mut self, index: usize) -> Option<&mut Atom> {
+        self.atoms.get_mut(index)
     }
 
     pub fn iter(&self) -> std::slice::Iter<'_, Atom> {
@@ -1934,14 +2101,58 @@ impl Universe {
     }
 
     pub fn set_frame(&mut self, index: usize) -> crate::Result<()> {
-        if index >= self.trajectory.frames.len() {
-            return Err(crate::Error::InvalidInput(format!(
-                "frame index {index} is out of bounds for {} frames",
-                self.trajectory.frames.len()
-            )));
-        }
-        self.trajectory.current = index + 1;
-        Ok(())
+        self.trajectory.set_frame(index)
+    }
+
+    /// Select a frame by signed index, accepting Python-style negative values.
+    pub fn set_frame_signed(&mut self, index: isize) -> crate::Result<()> {
+        self.trajectory.set_frame_signed(index)
+    }
+
+    /// Return the zero-based index of the currently selected frame.
+    #[must_use]
+    pub fn current_frame_index(&self) -> Option<usize> {
+        self.trajectory.current_index()
+    }
+
+    /// Return the selected frame's simulation time.
+    #[must_use]
+    pub fn time(&self) -> Option<f64> {
+        self.trajectory.time()
+    }
+
+    /// Return the selected frame's simulation step.
+    #[must_use]
+    pub fn step(&self) -> Option<usize> {
+        self.trajectory.step()
+    }
+
+    /// Return the selected frame's unit-cell dimensions.
+    #[must_use]
+    pub fn dimensions(&self) -> Option<[f64; 6]> {
+        self.trajectory.dimensions()
+    }
+
+    /// Copy the selected frame's velocities when present.
+    #[must_use]
+    pub fn velocities(&self) -> Option<Vec<[f64; 3]>> {
+        self.trajectory.velocities()
+    }
+
+    /// Copy the selected frame's forces when present.
+    #[must_use]
+    pub fn forces(&self) -> Option<Vec<[f64; 3]>> {
+        self.trajectory.forces()
+    }
+
+    /// Return selected frame velocities for in-place modification when present.
+    pub fn velocities_mut(&mut self) -> Option<&mut [[f64; 3]]> {
+        self.trajectory.velocities_mut()
+    }
+
+    /// Return selected frame forces for in-place modification when present.
+    pub fn forces_mut(&mut self) -> Option<&mut [[f64; 3]]> {
+        self.trajectory.forces_mut()
     }
 
     pub fn positions(&self) -> Vec<[f64; 3]> {
@@ -2782,6 +2993,68 @@ mod tests {
         universe.current_frame_mut().unwrap().positions[0][0] = 6.0;
         universe.positions_mut().unwrap()[1][0] = 7.0;
         assert_eq!(universe.positions(), vec![[6.0, 0.0, 0.0], [7.0, 0.0, 0.0]]);
+    }
+
+    #[test]
+    fn trajectory_reader_metadata_and_signed_selection_follow_cursor() {
+        let mut first = Frame::new(vec![[1.0, 0.0, 0.0]]);
+        first.step = 11;
+        first.time = 1.5;
+        first.dimensions = Some([10.0, 11.0, 12.0, 90.0, 90.0, 90.0]);
+        first.velocities = Some(vec![[0.1, 0.2, 0.3]]);
+        let mut second = Frame::new(vec![[2.0, 0.0, 0.0]]);
+        second.step = 22;
+        second.time = 2.5;
+        second.forces = Some(vec![[1.0, 1.1, 1.2]]);
+        let mut trajectory = Trajectory::new(vec![first, second]);
+
+        assert_eq!(trajectory.current_index(), Some(0));
+        assert_eq!(trajectory.current_frame_index(), Some(0));
+        assert_eq!(trajectory.time(), Some(1.5));
+        assert_eq!(trajectory.step(), Some(11));
+        assert_eq!(trajectory.dimensions().unwrap()[0], 10.0);
+        assert_eq!(trajectory.velocities(), Some(vec![[0.1, 0.2, 0.3]]));
+        assert_eq!(trajectory.forces(), None);
+        assert_eq!(trajectory.get_signed(-1).unwrap().step, 22);
+        assert!(trajectory.get_signed(-3).is_none());
+
+        trajectory.set_frame_signed(-1).unwrap();
+        assert_eq!(trajectory.current_index(), Some(1));
+        assert_eq!(trajectory.time(), Some(2.5));
+        assert_eq!(trajectory.step(), Some(22));
+        assert_eq!(trajectory.velocities(), None);
+        assert_eq!(trajectory.forces(), Some(vec![[1.0, 1.1, 1.2]]));
+        trajectory.positions_mut().unwrap()[0][0] = 4.0;
+        assert_eq!(trajectory.positions(), vec![[4.0, 0.0, 0.0]]);
+        assert!(trajectory.set_frame_signed(-3).is_err());
+        assert!(trajectory.set_frame(2).is_err());
+
+        trajectory.rewind();
+        assert_eq!(trajectory.current_index(), Some(0));
+        for frame in &mut trajectory {
+            frame.positions_mut()[0][1] = 7.0;
+        }
+        assert_eq!(trajectory[1][0], [4.0, 7.0, 0.0]);
+    }
+
+    #[test]
+    fn universe_delegates_selected_frame_metadata() {
+        let mut universe = Universe::from_atoms(vec![Atom::new(0, "C", [0.0, 0.0, 0.0])]);
+        let mut frame = Frame::new(vec![[2.0, 0.0, 0.0]]);
+        frame.step = 9;
+        frame.time = 4.5;
+        frame.dimensions = Some([3.0, 4.0, 5.0, 90.0, 90.0, 90.0]);
+        frame.forces = Some(vec![[1.0, 2.0, 3.0]]);
+        universe.trajectory = Trajectory::new(vec![Frame::new(vec![[0.0, 0.0, 0.0]]), frame]);
+
+        universe.set_frame_signed(-1).unwrap();
+        assert_eq!(universe.current_frame_index(), Some(1));
+        assert_eq!(universe.time(), Some(4.5));
+        assert_eq!(universe.step(), Some(9));
+        assert_eq!(universe.dimensions().unwrap()[..3], [3.0, 4.0, 5.0]);
+        assert_eq!(universe.forces(), Some(vec![[1.0, 2.0, 3.0]]));
+        universe.forces_mut().unwrap()[0][0] = 8.0;
+        assert_eq!(universe.forces(), Some(vec![[8.0, 2.0, 3.0]]));
     }
 
     #[test]
