@@ -1085,8 +1085,7 @@ fn parse_inpcrd(input: &str) -> Result<InpcrdFile, AmberError> {
     let time = header_values
         .next()
         .map(|value| {
-            value
-                .parse::<f64>()
+            parse_inpcrd_float(value)
                 .map_err(|_| parse_error("INPCRD", "time is not a valid number"))
         })
         .transpose()?;
@@ -1094,8 +1093,7 @@ fn parse_inpcrd(input: &str) -> Result<InpcrdFile, AmberError> {
     let values = rest
         .split_whitespace()
         .map(|value| {
-            value
-                .parse::<f64>()
+            parse_inpcrd_float(value)
                 .map_err(|_| parse_error("INPCRD", "coordinate payload contains an invalid number"))
         })
         .collect::<Result<Vec<_>, _>>()?;
@@ -1156,6 +1154,12 @@ fn parse_inpcrd(input: &str) -> Result<InpcrdFile, AmberError> {
         time,
         coordinates: CoordinateFile::new(vec![frame]),
     })
+}
+
+fn parse_inpcrd_float(value: &str) -> Result<f64, std::num::ParseFloatError> {
+    value
+        .parse::<f64>()
+        .or_else(|_| value.replace(['D', 'd'], "E").parse::<f64>())
 }
 
 fn write_inpcrd_document<W: Write>(file: &InpcrdFile, mut writer: W) -> Result<(), AmberError> {
@@ -1286,6 +1290,14 @@ mod tests {
         let parsed = InpcrdFile::from_str(&serialized).unwrap();
         assert_eq!(parsed.coordinates.n_atoms(), 5);
         assert!((parsed.coordinates.frames[0].positions[4][2] + 7.9729560).abs() < 1.0e-6);
+    }
+
+    #[test]
+    fn inpcrd_accepts_fortran_d_exponents() {
+        let file =
+            InpcrdFile::from_str("title\n    1 1.25D+01\n 1.0D+00 -2.5d+00 3.0D-01\n").unwrap();
+        assert_eq!(file.time, Some(12.5));
+        assert_eq!(file.coordinates.frames[0].positions[0], [1.0, -2.5, 0.3]);
     }
 
     #[test]
