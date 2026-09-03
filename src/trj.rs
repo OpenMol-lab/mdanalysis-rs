@@ -156,6 +156,10 @@ impl CoordinateFile {
         Ok(TrjFile::read(reader, n_atoms)?.coordinates)
     }
 
+    pub fn read_trj_file(path: impl AsRef<Path>, n_atoms: usize) -> Result<Self, TrjError> {
+        Ok(TrjFile::read_file(path, n_atoms)?.coordinates)
+    }
+
     pub fn from_trj_bytes(bytes: &[u8], n_atoms: usize) -> Result<Self, TrjError> {
         Ok(TrjFile::from_bytes(bytes, n_atoms)?.coordinates)
     }
@@ -164,6 +168,10 @@ impl CoordinateFile {
 impl Universe {
     pub fn from_trj(path: impl AsRef<Path>, n_atoms: usize) -> crate::Result<Self> {
         Self::from_trj_file(read_trj(path, n_atoms)?)
+    }
+
+    pub fn from_trj_bytes(bytes: &[u8], n_atoms: usize) -> crate::Result<Self> {
+        Self::from_trj_file(TrjFile::from_bytes(bytes, n_atoms)?)
     }
 
     pub fn from_trj_file(file: TrjFile) -> crate::Result<Self> {
@@ -196,6 +204,18 @@ impl Universe {
         Ok(universe)
     }
 
+    pub fn from_psf_and_trj_bytes(psf: &str, bytes: &[u8], n_atoms: usize) -> crate::Result<Self> {
+        let mut universe = Self::from_psf_str(psf)?;
+        if universe.n_atoms() != n_atoms {
+            return Err(crate::Error::InvalidInput(format!(
+                "PSF contains {} atoms, requested TRJ atom count is {n_atoms}",
+                universe.n_atoms()
+            )));
+        }
+        attach_trj(&mut universe, TrjFile::from_bytes(bytes, n_atoms)?)?;
+        Ok(universe)
+    }
+
     pub fn from_prmtop_and_trj(
         topology_path: impl AsRef<Path>,
         trj_path: impl AsRef<Path>,
@@ -204,6 +224,22 @@ impl Universe {
         let n_atoms = universe.n_atoms();
         let trajectory = read_trj(trj_path, n_atoms)?;
         attach_trj(&mut universe, trajectory)?;
+        Ok(universe)
+    }
+
+    pub fn from_prmtop_and_trj_bytes(
+        topology: &str,
+        bytes: &[u8],
+        n_atoms: usize,
+    ) -> crate::Result<Self> {
+        let mut universe = Self::from_prmtop_str(topology)?;
+        if universe.n_atoms() != n_atoms {
+            return Err(crate::Error::InvalidInput(format!(
+                "PRMTOP contains {} atoms, requested TRJ atom count is {n_atoms}",
+                universe.n_atoms()
+            )));
+        }
+        attach_trj(&mut universe, TrjFile::from_bytes(bytes, n_atoms)?)?;
         Ok(universe)
     }
 }
@@ -336,7 +372,7 @@ fn parse_trj(input: &str, n_atoms: usize, dt: f64) -> Result<TrjFile, TrjError> 
 fn parse_values(line: &str, line_number: usize) -> Result<Vec<f64>, TrjError> {
     let values = line
         .split_whitespace()
-        .map(|value| value.parse::<f64>())
+        .map(|value| parse_float(value).ok_or(()))
         .collect::<Result<Vec<_>, _>>();
     if let Ok(values) = values
         && !values.is_empty()
@@ -349,7 +385,7 @@ fn parse_values(line: &str, line_number: usize) -> Result<Vec<f64>, TrjError> {
     for chunk in bytes.chunks(8) {
         let value = std::str::from_utf8(chunk)
             .ok()
-            .and_then(|text| text.trim().parse::<f64>().ok())
+            .and_then(|text| parse_float(text.trim()))
             .ok_or_else(|| TrjError::Parse {
                 line: line_number,
                 message: format!("invalid numeric field in {line:?}"),
@@ -363,6 +399,13 @@ fn parse_values(line: &str, line_number: usize) -> Result<Vec<f64>, TrjError> {
         });
     }
     Ok(values)
+}
+
+fn parse_float(value: &str) -> Option<f64> {
+    value
+        .parse::<f64>()
+        .ok()
+        .or_else(|| value.replace(['D', 'd'], "E").parse::<f64>().ok())
 }
 
 #[cfg(test)]
@@ -406,5 +449,11 @@ mod tests {
         assert!(TrjFile::from_bytes(b"title\n 1.0 2.0 3.0\n", 0).is_err());
         let title = format!("{}\n", "x".repeat(81));
         assert!(TrjFile::from_bytes(title.as_bytes(), 1).is_err());
+    }
+
+    #[test]
+    fn accepts_fortran_d_exponents() {
+        let file = TrjFile::from_bytes(b"title\n 1.0D+00 2.0D+00 3.0D+00\n", 1).unwrap();
+        assert_eq!(file.frame(0).unwrap().positions[0], [1.0, 2.0, 3.0]);
     }
 }
