@@ -391,7 +391,10 @@ fn parse_atom(
             message: "atom name is empty".to_string(),
         });
     }
-    let residue_name = field(line, 17, 20).trim().to_string();
+    // Standard residue names occupy three characters, but common
+    // non-standard records such as `TIP3` use the complete four-column slot
+    // when no chain ID is present.
+    let residue_name = field(line, 17, 21).trim().to_string();
     // Extended PDB (XPDB) files permit five-digit residue numbers.  The
     // fifth character occupies the insertion-code column, but is numeric in
     // that format; retain it instead of silently truncating the residue ID.
@@ -697,7 +700,7 @@ where
 fn format_atom(atom: &PdbAtom) -> String {
     let record = if atom.hetatm { "HETATM" } else { "ATOM  " };
     let atom_name = format_atom_name(atom);
-    let residue_name = fit_field(&atom.residue_name, 3, true);
+    let residue_name = fit_field(&atom.residue_name, 4, false);
     let chain_id = atom.chain_id.unwrap_or(' ');
     let segid = atom
         .segid
@@ -721,7 +724,7 @@ fn format_atom(atom: &PdbAtom) -> String {
         .map_or_else(|| "  ".to_string(), |value| fit_field(value, 2, true));
 
     format!(
-        "{record}{:>5} {atom_name}{alt_loc}{residue_name} {chain_id}{:>4}{insertion_code}   {:>8.3}{:>8.3}{:>8.3}{occupancy}{temperature_factor}      {segid}{element}{charge}",
+        "{record}{:>5} {atom_name}{alt_loc}{residue_name}{chain_id}{:>4}{insertion_code}   {:>8.3}{:>8.3}{:>8.3}{occupancy}{temperature_factor}      {segid}{element}{charge}",
         atom.serial, atom.residue_sequence, atom.x, atom.y, atom.z
     )
 }
@@ -927,6 +930,7 @@ mod tests {
         let structure = PdbStructure::from_str(input).expect("blank resid is valid");
         assert_eq!(structure.atoms.len(), 2);
         assert!(structure.atoms.iter().all(|atom| atom.resid() == 1));
+        assert!(structure.atoms.iter().all(|atom| atom.resname() == "TIP3"));
     }
 
     #[test]
@@ -965,6 +969,18 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![9999, 10000, 10001]
         );
+    }
+
+    #[test]
+    fn writes_and_reads_four_character_residue_names() {
+        let input = concat!(
+            "ATOM      1  H2  TIP3           10.000  44.891  14.267  1.00  0.00      TIP3\n",
+            "END\n",
+        );
+        let structure = PdbStructure::from_str(input).expect("valid four-character residue");
+        assert_eq!(structure.atoms[0].resname(), "TIP3");
+        let reparsed = PdbStructure::from_str(&structure.to_pdb_string().unwrap()).unwrap();
+        assert_eq!(reparsed.atoms[0].resname(), "TIP3");
     }
 
     #[test]
