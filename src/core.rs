@@ -630,6 +630,18 @@ impl Universe {
         Self::from_pdb_structure(PdbStructure::from_str(input)?)
     }
 
+    /// Construct a universe from an extended-PDB file with five-digit
+    /// residue identifiers.  The underlying record layout is otherwise the
+    /// same as standard PDB, so this delegates to [`Universe::from_pdb`].
+    pub fn from_xpdb(path: impl AsRef<Path>) -> crate::Result<Self> {
+        Self::from_pdb(path)
+    }
+
+    /// Construct a universe from an extended-PDB document held in memory.
+    pub fn from_xpdb_str(input: &str) -> crate::Result<Self> {
+        Self::from_pdb_str(input)
+    }
+
     /// Construct a universe from a single-frame AutoDock PDBQT file.
     pub fn from_pdbqt(path: impl AsRef<Path>) -> crate::Result<Self> {
         Self::from_pdbqt_structure(read_pdbqt(path)?)

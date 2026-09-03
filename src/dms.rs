@@ -320,6 +320,7 @@ impl Universe {
 
     /// Construct a universe from parsed DMS data.
     pub fn from_dms_file(file: DmsFile) -> crate::Result<Self> {
+        validate_structure(&file)?;
         let mut atoms = Vec::with_capacity(file.particles.len());
         let mut id_to_index = HashMap::with_capacity(file.particles.len());
         for (index, particle) in file.particles.iter().enumerate() {

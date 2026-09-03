@@ -358,8 +358,24 @@ fn parse_atom(line: &str, line_number: usize, hetatm: bool) -> Result<PdbAtom, P
         });
     }
     let residue_name = field(line, 17, 20).trim().to_string();
-    let residue_sequence =
-        parse_optional::<i32>(line, 22, 26, line_number, "residue sequence")?.unwrap_or(1);
+    // Extended PDB (XPDB) files permit five-digit residue numbers.  The
+    // fifth character occupies the insertion-code column, but is numeric in
+    // that format; retain it instead of silently truncating the residue ID.
+    let standard_residue = field(line, 22, 26);
+    let extended_residue = field(line, 22, 27);
+    let residue_sequence = if extended_residue.trim().len() > standard_residue.trim().len()
+        && extended_residue.trim().parse::<i32>().is_ok()
+    {
+        extended_residue
+            .trim()
+            .parse::<i32>()
+            .map_err(|error| PdbError::Parse {
+                line: line_number,
+                message: format!("invalid residue sequence: {error}"),
+            })?
+    } else {
+        parse_optional::<i32>(line, 22, 26, line_number, "residue sequence")?.unwrap_or(1)
+    };
     let x = parse_required::<f64>(line, 30, 38, line_number, "x coordinate")?;
     let y = parse_required::<f64>(line, 38, 46, line_number, "y coordinate")?;
     let z = parse_required::<f64>(line, 46, 54, line_number, "z coordinate")?;
@@ -708,6 +724,18 @@ mod tests {
         let structure = PdbStructure::from_str(input).expect("blank resid is valid");
         assert_eq!(structure.atoms.len(), 2);
         assert!(structure.atoms.iter().all(|atom| atom.resid() == 1));
+    }
+
+    #[test]
+    fn parses_five_digit_xpdb_residue_numbers() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../mdanalysis/testsuite/MDAnalysisTests/data/5digitResid.pdb");
+        let structure = PdbStructure::read_file(path).expect("valid XPDB fixture");
+        assert_eq!(structure.atoms.len(), 5);
+        assert_eq!(structure.atoms[3].residue_sequence, 1000);
+        assert_eq!(structure.atoms[4].residue_sequence, 10000);
+        assert_eq!(structure.atoms[4].element, None);
+        assert_eq!(structure.frames.len(), 1);
     }
 
     #[test]
