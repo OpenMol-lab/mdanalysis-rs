@@ -420,6 +420,53 @@ mod tests {
     }
 
     #[test]
+    fn prmtop_constructor_preserves_selection_and_trajectory_geometry() {
+        let universe =
+            Universe::from_prmtop_and_trj(fixture("ache.prmtop"), fixture("ache.mdcrd")).unwrap();
+        assert_eq!(universe.n_atoms(), 252);
+        assert_eq!(universe.n_frames(), 11);
+        assert_eq!(universe.trajectory.frames[0].dimensions, None);
+        let protein = universe.select_atoms("protein").unwrap();
+        assert_eq!(protein.len(), 252);
+        let total: f64 = universe
+            .trajectory
+            .frames
+            .iter()
+            .map(|frame| {
+                let positions = protein
+                    .atoms
+                    .iter()
+                    .map(|atom| frame.positions[atom.index])
+                    .collect::<Vec<_>>();
+                let mut center = [0.0; 3];
+                for position in &positions {
+                    for axis in 0..3 {
+                        center[axis] += position[axis];
+                    }
+                }
+                center
+                    .iter_mut()
+                    .for_each(|value| *value /= positions.len() as f64);
+                center.iter().sum::<f64>()
+            })
+            .sum();
+        assert!((total - 472.2592159509659).abs() < 1.0e-3);
+    }
+
+    #[test]
+    fn periodic_prmtop_constructor_preserves_box_and_protein_selection() {
+        let universe = Universe::from_prmtop_and_trj(
+            fixture("capped-ala.prmtop"),
+            fixture("capped-ala.mdcrd.bz2"),
+        )
+        .unwrap();
+        assert_eq!(universe.n_atoms(), 5071);
+        assert_eq!(universe.n_frames(), 11);
+        assert!(universe.trajectory.frames[0].dimensions.is_some());
+        assert_eq!(universe.select_atoms("protein").unwrap().len(), 22);
+    }
+
+    #[test]
     fn reads_unboxed_and_compressed_trajectory() {
         let plain = read_trj(fixture("ache.mdcrd"), 252).unwrap();
         let compressed = read_trj(fixture("ache.mdcrd.bz2"), 252).unwrap();
