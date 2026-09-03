@@ -246,6 +246,14 @@ impl HoomdXmlFile {
     }
 
     #[must_use]
+    pub fn velocities(&self) -> Option<Vec<[f64; 3]>> {
+        self.atoms
+            .iter()
+            .map(|atom| atom.velocity)
+            .collect::<Option<Vec<_>>>()
+    }
+
+    #[must_use]
     pub fn optional_radii(&self) -> Vec<Option<f64>> {
         self.atoms.iter().map(HoomdXmlAtom::radius).collect()
     }
@@ -254,6 +262,18 @@ impl HoomdXmlFile {
 /// Read a HOOMD XML document from a filesystem path.
 pub fn read_hoomdxml(path: impl AsRef<Path>) -> Result<HoomdXmlFile, HoomdXmlError> {
     HoomdXmlFile::read_file(path)
+}
+
+impl CoordinateFile {
+    /// Read a HOOMD XML document and return its coordinate frame.
+    pub fn read_hoomdxml<R: Read>(reader: R) -> Result<Self, HoomdXmlError> {
+        Ok(HoomdXmlFile::read(reader)?.coordinates)
+    }
+
+    /// Parse HOOMD XML text and return its coordinate frame.
+    pub fn from_hoomdxml_str(input: &str) -> Result<Self, HoomdXmlError> {
+        Ok(HoomdXmlFile::from_str(input)?.coordinates)
+    }
 }
 
 /// Errors produced by the HOOMD XML parser.
