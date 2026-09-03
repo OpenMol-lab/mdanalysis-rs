@@ -32,6 +32,7 @@ pub mod psf;
 pub mod selection;
 pub mod topology_groups;
 pub mod transformations;
+pub mod trc;
 pub mod trz;
 pub mod txyz;
 pub mod units;
@@ -105,6 +106,7 @@ pub use pdb::{PdbAtom, PdbBond, PdbCryst1, PdbError, PdbStructure, read_pdb, wri
 pub use pdbqt::{PdbqtAtom, PdbqtError, PdbqtStructure, read_pdbqt, write_pdbqt};
 pub use psf::{PsfAtom, PsfBond, PsfError, PsfStructure, read_psf, write_psf};
 pub use topology_groups::{AngleValue, BondLength, DihedralValue, TopologyGroupExt};
+pub use trc::{TrcData, TrcError, TrcFile, TrcStructure, read_trc};
 pub use trz::{TrzError, TrzFile, TrzHeader, TrzWriteOptions, read_trz, write_trz};
 pub use txyz::{
     ArcFile, TxyzAtom, TxyzBond, TxyzData, TxyzError, TxyzFile, TxyzStructure, read_arc, read_txyz,
@@ -136,6 +138,7 @@ pub enum Error {
     Fhiaims(fhiaims::FhiaimsError),
     Gms(gms::GmsError),
     Gsd(gsd::GsdError),
+    Trc(trc::TrcError),
     Itp(itp::ItpError),
     HoomdXml(hoomdxml::HoomdXmlError),
     Distance(DistanceError),
@@ -164,6 +167,7 @@ impl std::fmt::Display for Error {
             Self::Fhiaims(error) => write!(f, "FHI-AIMS error: {error}"),
             Self::Gms(error) => write!(f, "GMS error: {error}"),
             Self::Gsd(error) => write!(f, "GSD error: {error}"),
+            Self::Trc(error) => write!(f, "TRC trajectory error: {error}"),
             Self::Itp(error) => write!(f, "ITP error: {error}"),
             Self::HoomdXml(error) => write!(f, "HOOMD XML error: {error}"),
             Self::Distance(error) => write!(f, "distance error: {error}"),
@@ -275,6 +279,12 @@ impl From<gms::GmsError> for Error {
 impl From<gsd::GsdError> for Error {
     fn from(error: gsd::GsdError) -> Self {
         Self::Gsd(error)
+    }
+}
+
+impl From<trc::TrcError> for Error {
+    fn from(error: trc::TrcError) -> Self {
+        Self::Trc(error)
     }
 }
 
