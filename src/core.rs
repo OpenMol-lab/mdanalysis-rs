@@ -603,9 +603,23 @@ impl Frame {
         self.positions.get(index)
     }
 
+    /// Return an atom coordinate by signed index, accepting Python-style
+    /// negative values.
+    #[must_use]
+    pub fn get_signed(&self, index: isize) -> Option<&[f64; 3]> {
+        let index = signed_index(self.positions.len(), index)?;
+        self.get(index)
+    }
+
     /// Return the position of the atom at `index` for in-place modification.
     pub fn get_mut(&mut self, index: usize) -> Option<&mut [f64; 3]> {
         self.positions.get_mut(index)
+    }
+
+    /// Return an atom coordinate by signed index for in-place modification.
+    pub fn get_signed_mut(&mut self, index: isize) -> Option<&mut [f64; 3]> {
+        let index = signed_index(self.positions.len(), index)?;
+        self.get_mut(index)
     }
 
     /// Iterate over atom positions without changing the frame metadata.
@@ -3504,9 +3518,13 @@ mod tests {
         assert_eq!(frame.len(), 4);
         assert!(!frame.is_empty());
         assert_eq!(frame.get(1), Some(&[1.0, 1.0, 1.0]));
+        assert_eq!(frame.get_signed(-1), Some(&[3.0, 3.0, 3.0]));
+        assert!(frame.get_signed(-5).is_none());
         assert_eq!(frame.get(4), None);
         assert_eq!(frame[2], [2.0, 2.0, 2.0]);
         frame[2] = [20.0, 20.0, 20.0];
+        frame.get_signed_mut(-1).unwrap()[0] = 30.0;
+        assert_eq!(frame[3][0], 30.0);
         assert_eq!(frame.iter().count(), 4);
         frame.iter_mut().next().unwrap()[0] = -1.0;
         assert_eq!(frame[0][0], -1.0);

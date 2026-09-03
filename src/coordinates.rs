@@ -83,9 +83,23 @@ impl CoordinateFrame {
         self.positions.get(index)
     }
 
+    /// Return an atom coordinate by signed index, accepting Python-style
+    /// negative values.
+    #[must_use]
+    pub fn get_signed(&self, index: isize) -> Option<&[f64; 3]> {
+        let index = signed_index(self.positions.len(), index)?;
+        self.get(index)
+    }
+
     /// Return one atom coordinate for in-place modification.
     pub fn get_mut(&mut self, index: usize) -> Option<&mut [f64; 3]> {
         self.positions.get_mut(index)
+    }
+
+    /// Return an atom coordinate by signed index for in-place modification.
+    pub fn get_signed_mut(&mut self, index: isize) -> Option<&mut [f64; 3]> {
+        let index = signed_index(self.positions.len(), index)?;
+        self.get_mut(index)
     }
 
     /// Iterate over atom coordinates in file order.
@@ -191,6 +205,14 @@ where
     (start, end)
 }
 
+fn signed_index(length: usize, index: isize) -> Option<usize> {
+    if index < 0 {
+        length.checked_sub(index.unsigned_abs())
+    } else {
+        usize::try_from(index).ok()
+    }
+}
+
 fn slice_metadata<T: Clone>(values: &[T], start: usize, end: usize, total: usize) -> Vec<T> {
     if values.is_empty() || values.len() != total {
         Vec::new()
@@ -263,9 +285,22 @@ impl CoordinateFile {
         self.frame(index)
     }
 
+    /// Return a frame by signed index, accepting Python-style negative values.
+    #[must_use]
+    pub fn get_signed(&self, index: isize) -> Option<&CoordinateFrame> {
+        let index = signed_index(self.frames.len(), index)?;
+        self.get(index)
+    }
+
     /// Return one frame by zero-based index mutably.
     pub fn get_mut(&mut self, index: usize) -> Option<&mut CoordinateFrame> {
         self.frame_mut(index)
+    }
+
+    /// Return a frame by signed index for in-place modification.
+    pub fn get_signed_mut(&mut self, index: isize) -> Option<&mut CoordinateFrame> {
+        let index = signed_index(self.frames.len(), index)?;
+        self.get_mut(index)
     }
 
     /// Copy a contiguous range of frames while retaining each frame's
@@ -1165,6 +1200,10 @@ mod tests {
         assert_eq!(file.len(), 2);
         assert!(!file.is_empty());
         assert_eq!(file[1].positions[0][0], 2.0);
+        assert_eq!(file.get_signed(-1).unwrap().positions[0][0], 2.0);
+        assert!(file.get_signed(-3).is_none());
+        file.get_signed_mut(-1).unwrap().positions[0][0] = 4.0;
+        assert_eq!(file[1].positions[0][0], 4.0);
         file[1].positions[0][0] = 3.0;
         assert_eq!(file.iter().count(), 2);
         assert_eq!(file.into_iter().count(), 2);
@@ -1219,12 +1258,16 @@ mod tests {
         assert_eq!(frame.len(), 3);
         assert!(!frame.is_empty());
         assert_eq!(frame.get(1), Some(&[3.0, 4.0, 5.0]));
+        assert_eq!(frame.get_signed(-1), Some(&[6.0, 7.0, 8.0]));
+        assert!(frame.get_signed(-4).is_none());
         assert_eq!(frame[2], [6.0, 7.0, 8.0]);
         frame[0] = [-1.0, -2.0, -3.0];
+        frame.get_signed_mut(-1).unwrap()[0] = 9.0;
+        assert_eq!(frame[2][0], 9.0);
         assert_eq!(frame.positions[0], [-1.0, -2.0, -3.0]);
 
         let sliced = frame.slice(1..=2);
-        assert_eq!(sliced.positions, vec![[3.0, 4.0, 5.0], [6.0, 7.0, 8.0]]);
+        assert_eq!(sliced.positions, vec![[3.0, 4.0, 5.0], [9.0, 7.0, 8.0]]);
         assert_eq!(
             sliced.velocities,
             Some(vec![[13.0, 14.0, 15.0], [16.0, 17.0, 18.0]])
