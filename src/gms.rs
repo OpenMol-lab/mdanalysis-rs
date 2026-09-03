@@ -10,10 +10,10 @@
 //! provided.
 
 use crate::coordinates::{CoordinateFile, CoordinateFrame};
+use bzip2::read::BzDecoder;
 use flate2::read::GzDecoder;
 use std::fmt;
-use std::fs::File;
-use std::io::{self, Read};
+use std::io::{self, Cursor, Read};
 use std::path::Path;
 
 /// An atom from GAMESS' atomic coordinate table.
@@ -61,21 +61,30 @@ impl GmsFile {
         Self::from_str(&input)
     }
 
-    /// Read GAMESS output from a path. Files ending in `.gz` are decompressed
-    /// on the fly; all other paths are treated as plain text. Bzip2 output is
-    /// not supported by this text reader.
-    pub fn read_file<P: AsRef<Path>>(path: P) -> Result<Self, GmsError> {
-        let path = path.as_ref();
-        let file = File::open(path)?;
-        if path
-            .extension()
-            .and_then(|extension| extension.to_str())
-            .is_some_and(|extension| extension.eq_ignore_ascii_case("gz"))
-        {
-            Self::read(GzDecoder::new(file))
+    /// Parse GAMESS output bytes, transparently decompressing gzip or bzip2
+    /// streams based on their magic bytes.
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, GmsError> {
+        let decoded = if bytes.starts_with(&[0x1f, 0x8b]) {
+            let mut output = Vec::new();
+            GzDecoder::new(Cursor::new(bytes)).read_to_end(&mut output)?;
+            output
+        } else if bytes.starts_with(b"BZh") {
+            let mut output = Vec::new();
+            BzDecoder::new(Cursor::new(bytes)).read_to_end(&mut output)?;
+            output
         } else {
-            Self::read(file)
-        }
+            bytes.to_vec()
+        };
+        let input = std::str::from_utf8(&decoded).map_err(|error| {
+            GmsError::InvalidStructure(format!("GMS output is not UTF-8: {error}"))
+        })?;
+        Self::from_str(input)
+    }
+
+    /// Read GAMESS output from a path, transparently decompressing gzip or
+    /// bzip2 streams based on their magic bytes.
+    pub fn read_file<P: AsRef<Path>>(path: P) -> Result<Self, GmsError> {
+        Self::from_bytes(&std::fs::read(path)?)
     }
 
     /// Number of parsed coordinate frames.
@@ -589,6 +598,12 @@ fn parse_error(line: usize, message: impl Into<String>) -> GmsError {
 mod tests {
     use super::*;
 
+    fn fixture(name: &str) -> std::path::PathBuf {
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../mdanalysis/testsuite/MDAnalysisTests/data/gms")
+            .join(name)
+    }
+
     const OPTIMIZE: &str = "RUNTYP=OPTIMIZE\nTOTAL NUMBER OF ATOMS = 2\n ATOM ATOMIC COORDINATES (BOHR)\n ATOM CHARGE X Y Z\n --------\n H 1.0 0.0 0.0 0.0\n O 8.0 1.0 2.0 3.0\n1NSERCH= 0\n COORDINATES OF ALL ATOMS ARE (ANGS)\n ATOM CHARGE X Y Z\n --------\n H 1.0 0.1 0.2 0.3\n O 8.0 1.1 1.2 1.3\n1NSERCH= 1\n COORDINATES OF ALL ATOMS ARE (ANGS)\n ATOM CHARGE X Y Z\n --------\n H 1.0 0.4 0.5 0.6\n O 8.0 1.4 1.5 1.6\n";
 
     const SURFACE: &str = "RUNTYP=SURFACE\nTOTAL NUMBER OF ATOMS = 2\n ATOM ATOMIC COORDINATES (BOHR)\n ATOM CHARGE X Y Z\n --------\n H 1.0 0.0 0.0 0.0\n O 8.0 1.0 2.0 3.0\n COORD 1= 0.0 COORD 2= 0.0\n HAS ENERGY VALUE -1.0\n H 0.1 0.2 0.3\n O 1.1 1.2 1.3\n COORD 1= 0.1 COORD 2= 0.0\n HAS ENERGY VALUE -2.0\n H 0.4 0.5 0.6\n O 1.4 1.5 1.6\n";
@@ -652,5 +667,21 @@ mod tests {
             1,
         );
         assert!(GmsFile::from_str(&input).is_err());
+    }
+
+    #[test]
+    fn reads_gzip_and_bzip2_bytes_without_filename_hints() {
+        let gzip = std::fs::read(fixture("c1opt.gms.gz")).unwrap();
+        let gzip_file = GmsFile::from_bytes(&gzip).unwrap();
+        assert_eq!(gzip_file.n_frames(), 21);
+
+        let mut plain = Vec::new();
+        GzDecoder::new(Cursor::new(gzip))
+            .read_to_end(&mut plain)
+            .unwrap();
+        let mut encoder = bzip2::write::BzEncoder::new(Vec::new(), bzip2::Compression::default());
+        std::io::Write::write_all(&mut encoder, &plain).unwrap();
+        let bzip = encoder.finish().unwrap();
+        assert_eq!(GmsFile::from_bytes(&bzip).unwrap().n_atoms, 6);
     }
 }
