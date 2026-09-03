@@ -12,3 +12,4 @@ netcdf3 = "0.6.1"
 quick-xml = "0.42"
 rmpv = "1.3"
 rusqlite = { version = "0.32", features = ["bundled"] }
+tng-rs = "0.3"

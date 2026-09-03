@@ -12,6 +12,7 @@ use crate::selection::{
     AtomLike, Selection, SelectionError, select, select_with_bonds, select_with_bonds_and_groups,
 };
 use crate::xdr::{TrrFile, XtcFile, read_trr, read_xtc};
+use std::collections::BTreeMap;
 use std::path::Path;
 
 /// A single atom and its topology metadata.
@@ -386,6 +387,9 @@ pub struct Frame {
     pub dimensions: Option<[f64; 6]>,
     pub time: f64,
     pub step: usize,
+    /// Additional frame-level data supplied by formats that support named
+    /// blocks (for example TNG).
+    pub data: BTreeMap<String, Vec<f64>>,
 }
 
 impl Frame {
@@ -397,6 +401,7 @@ impl Frame {
             dimensions: None,
             time: 0.0,
             step: 0,
+            data: BTreeMap::new(),
         }
     }
 

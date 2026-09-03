@@ -32,6 +32,7 @@ pub mod pdb;
 pub mod pdbqt;
 pub mod psf;
 pub mod selection;
+pub mod tng;
 pub mod topology_groups;
 pub mod tpr;
 pub mod transformations;
@@ -113,6 +114,7 @@ pub use netcdf::{NetcdfData, NetcdfError, NetcdfFile, NetcdfStructure, read_netc
 pub use pdb::{PdbAtom, PdbBond, PdbCryst1, PdbError, PdbStructure, read_pdb, write_pdb};
 pub use pdbqt::{PdbqtAtom, PdbqtError, PdbqtStructure, read_pdbqt, write_pdbqt};
 pub use psf::{PsfAtom, PsfBond, PsfError, PsfStructure, read_psf, write_psf};
+pub use tng::{TngData, TngError, TngFile, TngStructure, read_tng};
 pub use topology_groups::{AngleValue, BondLength, DihedralValue, TopologyGroupExt};
 pub use tpr::{
     TprAtom, TprBond, TprData, TprError, TprFile, TprHeader, TprPrecision, TprSimBox, TprStructure,
@@ -155,6 +157,7 @@ pub enum Error {
     Tpr(tpr::TprError),
     Netcdf(netcdf::NetcdfError),
     Trj(trj::TrjError),
+    Tng(tng::TngError),
     H5md(h5md::H5mdError),
     Itp(itp::ItpError),
     HoomdXml(hoomdxml::HoomdXmlError),
@@ -188,6 +191,7 @@ impl std::fmt::Display for Error {
             Self::Tpr(error) => write!(f, "TPR topology error: {error}"),
             Self::Netcdf(error) => write!(f, "NetCDF trajectory error: {error}"),
             Self::Trj(error) => write!(f, "Amber TRJ trajectory error: {error}"),
+            Self::Tng(error) => write!(f, "TNG trajectory error: {error}"),
             Self::H5md(error) => write!(f, "H5MD trajectory error: {error}"),
             Self::Itp(error) => write!(f, "ITP error: {error}"),
             Self::HoomdXml(error) => write!(f, "HOOMD XML error: {error}"),
@@ -294,6 +298,12 @@ impl From<netcdf::NetcdfError> for Error {
 impl From<trj::TrjError> for Error {
     fn from(error: trj::TrjError) -> Self {
         Self::Trj(error)
+    }
+}
+
+impl From<tng::TngError> for Error {
+    fn from(error: tng::TngError) -> Self {
+        Self::Tng(error)
     }
 }
 
