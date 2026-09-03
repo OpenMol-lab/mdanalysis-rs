@@ -447,13 +447,14 @@ fn parse_document(raw: &RawGsd<'_>) -> Result<GsdFile, GsdError> {
         return Err(invalid("particles/N must be positive"));
     }
     let types = read_types(raw, 0, first_n)?;
-    let type_ids = read_ints(raw, 0, "particles/typeid").unwrap_or_else(|_| vec![0; first_n]);
+    let type_ids =
+        read_optional_ints(raw, 0, "particles/typeid")?.unwrap_or_else(|| vec![0; first_n]);
     if type_ids.len() != first_n {
         return Err(invalid(
             "particles/typeid length does not match particles/N",
         ));
     }
-    let bodies = read_ints(raw, 0, "particles/body").unwrap_or_else(|_| vec![-1; first_n]);
+    let bodies = read_optional_ints(raw, 0, "particles/body")?.unwrap_or_else(|| vec![-1; first_n]);
     if bodies.len() != first_n {
         return Err(invalid("particles/body length does not match particles/N"));
     }
@@ -463,9 +464,12 @@ fn parse_document(raw: &RawGsd<'_>) -> Result<GsdFile, GsdError> {
         .collect::<Result<Vec<_>, _>>()?;
     let min_body = body_values.iter().copied().min().unwrap_or(0);
     if min_body < 0 {
+        let offset = min_body
+            .checked_neg()
+            .ok_or_else(|| invalid("particle body normalization overflows"))?;
         for body in &mut body_values {
             *body = body
-                .checked_add(-min_body)
+                .checked_add(offset)
                 .ok_or_else(|| invalid("particle body adjustment overflows"))?;
         }
     }
@@ -742,11 +746,15 @@ fn scalar_usize(raw: &RawGsd<'_>, frame: usize, name: &str) -> Result<Option<usi
         .map_err(|_| invalid(format!("{name} contains a negative or oversized value")))
 }
 
-fn read_ints(raw: &RawGsd<'_>, frame: usize, name: &str) -> Result<Vec<i64>, GsdError> {
+fn read_optional_ints(
+    raw: &RawGsd<'_>,
+    frame: usize,
+    name: &str,
+) -> Result<Option<Vec<i64>>, GsdError> {
     let Some(chunk) = raw.chunk(frame, name) else {
-        return Err(invalid(format!("missing {name}")));
+        return Ok(None);
     };
-    read_chunk_ints(raw, name, chunk)
+    Ok(Some(read_chunk_ints(raw, name, chunk)?))
 }
 
 fn read_chunk_ints(raw: &RawGsd<'_>, name: &str, chunk: &Chunk) -> Result<Vec<i64>, GsdError> {
@@ -1050,6 +1058,51 @@ mod tests {
         assert!(matches!(
             GsdFile::from_bytes(&[0; 8]),
             Err(GsdError::Parse { .. })
+        ));
+    }
+
+    #[test]
+    fn rejects_malformed_optional_integer_chunks() {
+        let mut bytes = std::fs::read(fixture("example.gsd")).expect("fixture bytes");
+        let raw = RawGsd::parse(&bytes).expect("fixture should parse");
+        let name_id = raw
+            .names
+            .iter()
+            .position(|name| name == "particles/typeid")
+            .expect("typeid chunk name");
+        let index_location = usize_at(&bytes, 8).expect("index location");
+        let index_allocated = usize_at(&bytes, 16).expect("index count");
+        let entry = (0..index_allocated)
+            .map(|index| index_location + index * INDEX_ENTRY_SIZE)
+            .find(|&offset| {
+                u64_at(&bytes, offset).ok() == Some(0)
+                    && u16_at(&bytes, offset + 28).ok() == Some(name_id as u16)
+            })
+            .expect("typeid index entry");
+        // Type 11 is a byte/string value in GSD, not an integer.  The index
+        // remains structurally valid, so this exercises parse_document's
+        // handling of an invalid optional chunk rather than header parsing.
+        bytes[entry + 30] = 11;
+        assert!(matches!(
+            GsdFile::from_bytes(&bytes),
+            Err(GsdError::InvalidStructure(message)) if message.contains("particles/typeid")
+        ));
+    }
+
+    #[test]
+    fn rejects_body_normalization_overflow() {
+        let mut bytes = std::fs::read(fixture("example.gsd")).expect("fixture bytes");
+        let raw = RawGsd::parse(&bytes).expect("fixture should parse");
+        let body_chunk = raw.chunk(0, "particles/body").expect("body chunk").clone();
+        assert_eq!(
+            body_chunk.data_type, 7,
+            "fixture body chunk should be signed i32"
+        );
+        let location = usize::try_from(body_chunk.location).expect("body location");
+        bytes[location..location + 4].copy_from_slice(&i32::MIN.to_le_bytes());
+        assert!(matches!(
+            GsdFile::from_bytes(&bytes),
+            Err(GsdError::InvalidStructure(message)) if message.contains("normalization overflows")
         ));
     }
 }
