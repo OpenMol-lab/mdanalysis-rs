@@ -13,6 +13,7 @@ use crate::selection::{
 };
 use crate::xdr::{TrrFile, XtcFile, read_trr, read_xtc};
 use std::collections::BTreeMap;
+use std::ops::{Bound, Index, IndexMut, RangeBounds};
 use std::path::Path;
 
 /// A single atom and its topology metadata.
@@ -222,6 +223,23 @@ pub struct Bond {
     pub guessed: bool,
 }
 
+fn normalize_range<R>(range: R, length: usize) -> (usize, usize)
+where
+    R: RangeBounds<usize>,
+{
+    let start = match range.start_bound() {
+        Bound::Included(&value) => value,
+        Bound::Excluded(&value) => value.checked_add(1).expect("slice start overflow"),
+        Bound::Unbounded => 0,
+    };
+    let end = match range.end_bound() {
+        Bound::Included(&value) => value.checked_add(1).expect("slice end overflow"),
+        Bound::Excluded(&value) => value,
+        Bound::Unbounded => length,
+    };
+    (start, end)
+}
+
 impl Bond {
     pub fn new(atom1: usize, atom2: usize) -> Self {
         Self {
@@ -416,7 +434,7 @@ impl Frame {
     /// Number of atom coordinate triplets in this frame.
     #[must_use]
     pub fn len(&self) -> usize {
-        self.positions.len()
+        self.n_atoms()
     }
 
     /// Return whether this frame contains no atom coordinates.
@@ -442,15 +460,34 @@ impl Frame {
     }
 
     /// Copy a contiguous atom range, retaining frame-level metadata.
-    pub fn slice(&self, range: std::ops::Range<usize>) -> Self {
-        let mut frame = self.clone();
-        frame.positions = self.positions[range.clone()].to_vec();
-        frame.velocities = self
-            .velocities
-            .as_ref()
-            .map(|values| values[range.clone()].to_vec());
-        frame.forces = self.forces.as_ref().map(|values| values[range].to_vec());
-        frame
+    pub fn slice<R>(&self, range: R) -> Self
+    where
+        R: RangeBounds<usize>,
+    {
+        let (start, end) = normalize_range(range, self.positions.len());
+        let velocities = self.velocities.as_ref().map(|values| {
+            if values.len() == self.positions.len() {
+                values[start..end].to_vec()
+            } else {
+                Vec::new()
+            }
+        });
+        let forces = self.forces.as_ref().map(|values| {
+            if values.len() == self.positions.len() {
+                values[start..end].to_vec()
+            } else {
+                Vec::new()
+            }
+        });
+        Self {
+            positions: self.positions[start..end].to_vec(),
+            velocities,
+            forces,
+            dimensions: self.dimensions,
+            time: self.time,
+            step: self.step,
+            data: self.data.clone(),
+        }
     }
 
     pub fn n_atoms(&self) -> usize {
@@ -463,7 +500,7 @@ impl<'a> IntoIterator for &'a Frame {
     type IntoIter = std::slice::Iter<'a, [f64; 3]>;
 
     fn into_iter(self) -> Self::IntoIter {
-        self.positions.iter()
+        self.iter()
     }
 }
 
@@ -472,7 +509,7 @@ impl<'a> IntoIterator for &'a mut Frame {
     type IntoIter = std::slice::IterMut<'a, [f64; 3]>;
 
     fn into_iter(self) -> Self::IntoIter {
-        self.positions.iter_mut()
+        self.iter_mut()
     }
 }
 
@@ -517,7 +554,7 @@ impl Trajectory {
     /// Alias for [`Trajectory::n_frames`] matching collection terminology.
     #[must_use]
     pub fn len(&self) -> usize {
-        self.frames.len()
+        self.n_frames()
     }
 
     /// Return whether this trajectory contains no frames.
@@ -556,8 +593,31 @@ impl Trajectory {
         }
     }
 
+    /// Return the frame most recently yielded by [`Self::next`] mutably.
+    /// Before any advancement, this is the first frame when one exists.
+    pub fn current_frame_mut(&mut self) -> Option<&mut Frame> {
+        let index = self.current.saturating_sub(1);
+        self.frame_mut(index)
+    }
+
     pub fn frame_mut(&mut self, index: usize) -> Option<&mut Frame> {
         self.frames.get_mut(index)
+    }
+
+    /// Return a frame by zero-based index.
+    #[must_use]
+    pub fn get(&self, index: usize) -> Option<&Frame> {
+        self.frame(index)
+    }
+
+    /// Copy a contiguous range of frames and reset the new cursor.
+    #[must_use]
+    pub fn slice<R>(&self, range: R) -> Self
+    where
+        R: RangeBounds<usize>,
+    {
+        let (start, end) = normalize_range(range, self.frames.len());
+        Self::new(self.frames[start..end].to_vec())
     }
 
     pub fn rewind(&mut self) {
@@ -583,7 +643,7 @@ impl<'a> IntoIterator for &'a Trajectory {
     type Item = &'a Frame;
     type IntoIter = std::slice::Iter<'a, Frame>;
     fn into_iter(self) -> Self::IntoIter {
-        self.frames.iter()
+        self.iter()
     }
 }
 
@@ -742,16 +802,30 @@ impl AtomGroup {
         self.atoms.iter()
     }
 
-    pub fn slice(&self, range: std::ops::Range<usize>) -> Self {
-        Self::new(self.atoms[range].to_vec())
+    pub fn iter_mut(&mut self) -> std::slice::IterMut<'_, Atom> {
+        self.atoms.iter_mut()
+    }
+
+    pub fn slice<R>(&self, range: R) -> Self
+    where
+        R: RangeBounds<usize>,
+    {
+        let (start, end) = normalize_range(range, self.atoms.len());
+        Self::new(self.atoms[start..end].to_vec())
     }
 }
 
-impl std::ops::Index<usize> for AtomGroup {
+impl Index<usize> for AtomGroup {
     type Output = Atom;
 
     fn index(&self, index: usize) -> &Self::Output {
         &self.atoms[index]
+    }
+}
+
+impl IndexMut<usize> for AtomGroup {
+    fn index_mut(&mut self, index: usize) -> &mut Self::Output {
+        &mut self.atoms[index]
     }
 }
 
@@ -760,7 +834,25 @@ impl<'a> IntoIterator for &'a AtomGroup {
     type IntoIter = std::slice::Iter<'a, Atom>;
 
     fn into_iter(self) -> Self::IntoIter {
-        self.atoms.iter()
+        self.iter()
+    }
+}
+
+impl<'a> IntoIterator for &'a mut AtomGroup {
+    type Item = &'a mut Atom;
+    type IntoIter = std::slice::IterMut<'a, Atom>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter_mut()
+    }
+}
+
+impl IntoIterator for AtomGroup {
+    type Item = Atom;
+    type IntoIter = std::vec::IntoIter<Atom>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.atoms.into_iter()
     }
 }
 
@@ -1578,10 +1670,8 @@ impl Universe {
     /// Write the current topology and coordinates as a single-frame PDBQT
     /// document.
     pub fn write_pdbqt(&self, path: impl AsRef<Path>) -> crate::Result<()> {
-        let first_positions = self
-            .trajectory
-            .frames
-            .first()
+        let current_positions = self
+            .current_frame()
             .map(|frame| frame.positions.clone())
             .unwrap_or_else(|| {
                 self.topology
@@ -1596,7 +1686,10 @@ impl Universe {
             .iter()
             .enumerate()
             .map(|(index, atom)| {
-                let position = first_positions.get(index).copied().unwrap_or(atom.position);
+                let position = current_positions
+                    .get(index)
+                    .copied()
+                    .unwrap_or(atom.position);
                 let atom_type = atom
                     .atom_type
                     .clone()
@@ -1622,9 +1715,7 @@ impl Universe {
             })
             .collect();
         let cryst1 = self
-            .trajectory
-            .frames
-            .first()
+            .current_frame()
             .and_then(|frame| frame.dimensions)
             .map(|dimensions| crate::pdb::PdbCryst1 {
                 a: dimensions[0],
@@ -1818,11 +1909,12 @@ impl Universe {
     }
 
     pub fn current_frame(&self) -> Option<&Frame> {
-        if self.trajectory.current == 0 {
-            self.trajectory.frames.first()
-        } else {
-            self.trajectory.frames.get(self.trajectory.current - 1)
-        }
+        self.trajectory.current_frame()
+    }
+
+    /// Return the currently selected trajectory frame mutably.
+    pub fn current_frame_mut(&mut self) -> Option<&mut Frame> {
+        self.trajectory.current_frame_mut()
     }
 
     /// Reset trajectory iteration to its first frame.
@@ -1856,6 +1948,12 @@ impl Universe {
         self.current_frame()
             .map(|frame| frame.positions.clone())
             .unwrap_or_default()
+    }
+
+    /// Return the currently selected coordinates for in-place modification.
+    pub fn positions_mut(&mut self) -> Option<&mut [[f64; 3]]> {
+        self.current_frame_mut()
+            .map(|frame| frame.positions.as_mut_slice())
     }
 }
 
@@ -2203,6 +2301,36 @@ mod tests {
         let _ = std::fs::remove_file(path);
         assert_eq!(reparsed.positions(), universe.positions());
         assert_eq!(reparsed.topology.atoms[0].charge, -0.3);
+    }
+
+    #[test]
+    fn pdbqt_writer_uses_the_selected_trajectory_frame() {
+        let mut universe = Universe::from_atoms(vec![Atom::new(0, "C", [1.0, 2.0, 3.0])]);
+        let mut second_frame = Frame::new(vec![[4.0, 5.0, 6.0]]);
+        second_frame.dimensions = Some([10.0, 11.0, 12.0, 90.0, 90.0, 90.0]);
+        universe
+            .add_frame(second_frame)
+            .expect("matching frame atom count");
+        universe.set_frame(1).expect("second frame exists");
+        universe.positions_mut().expect("selected frame")[0] = [7.0, 8.0, 9.0];
+
+        let path = std::env::temp_dir().join(format!(
+            "mdanalysis-rs-pdbqt-frame-{}-{}.pdbqt",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock")
+                .as_nanos()
+        ));
+        universe.write_pdbqt(&path).expect("write PDBQT");
+        let reparsed = Universe::from_pdbqt(&path).expect("read PDBQT");
+        let _ = std::fs::remove_file(path);
+
+        assert_eq!(reparsed.positions(), vec![[7.0, 8.0, 9.0]]);
+        assert_eq!(
+            reparsed.current_frame().unwrap().dimensions,
+            Some([10.0, 11.0, 12.0, 90.0, 90.0, 90.0])
+        );
     }
 
     #[test]
@@ -2636,6 +2764,65 @@ mod tests {
         assert_eq!(trajectory.current_frame().unwrap().positions[0][0], 1.0);
         assert_eq!(trajectory.next().unwrap().positions[0][0], 1.0);
         assert_eq!(trajectory[1].positions[0][0], 3.0);
+    }
+
+    #[test]
+    fn trajectory_and_universe_expose_mutable_current_frames() {
+        let mut trajectory = Trajectory::new(vec![
+            Frame::new(vec![[1.0, 0.0, 0.0]]),
+            Frame::new(vec![[2.0, 0.0, 0.0]]),
+        ]);
+        trajectory.current_frame_mut().unwrap().positions[0][0] = 4.0;
+        assert_eq!(trajectory.current_frame().unwrap().positions[0][0], 4.0);
+        trajectory.next().unwrap();
+        trajectory.current_frame_mut().unwrap().positions[0][0] = 5.0;
+        assert_eq!(trajectory.current_frame().unwrap().positions[0][0], 5.0);
+
+        let mut universe = sample();
+        universe.current_frame_mut().unwrap().positions[0][0] = 6.0;
+        universe.positions_mut().unwrap()[1][0] = 7.0;
+        assert_eq!(universe.positions(), vec![[6.0, 0.0, 0.0], [7.0, 0.0, 0.0]]);
+    }
+
+    #[test]
+    fn trajectory_slice_preserves_frame_metadata_and_resets_cursor() {
+        let mut first = Frame::new(vec![[1.0, 0.0, 0.0]]);
+        first.step = 11;
+        first.time = 1.5;
+        let mut second = Frame::new(vec![[2.0, 0.0, 0.0]]);
+        second.step = 22;
+        second.time = 2.5;
+        let mut third = Frame::new(vec![[3.0, 0.0, 0.0]]);
+        third.step = 33;
+        third.time = 3.5;
+        let trajectory = Trajectory::new(vec![first, second, third]);
+
+        let sliced = trajectory.slice(1..=2);
+        assert_eq!(sliced.len(), 2);
+        assert_eq!(sliced.current, 0);
+        assert_eq!(sliced[0].positions[0][0], 2.0);
+        assert_eq!(sliced[0].step, 22);
+        assert_eq!(sliced[1].time, 3.5);
+
+        assert_eq!(trajectory.slice(..2).len(), 2);
+        assert_eq!(trajectory.slice(1..).len(), 2);
+        assert_eq!(trajectory.slice(..=1).len(), 2);
+        assert_eq!(trajectory.slice(1..=1)[0].positions[0][0], 2.0);
+    }
+
+    #[test]
+    fn atom_group_supports_mutable_and_owned_iteration() {
+        let mut group = AtomGroup::new(vec![
+            Atom::new(0, "N", [0.0, 0.0, 0.0]),
+            Atom::new(1, "CA", [1.0, 0.0, 0.0]),
+        ]);
+        group[0].position[0] = 2.0;
+        for atom in &mut group {
+            atom.position[1] = 3.0;
+        }
+        assert_eq!(group.positions(), vec![[2.0, 3.0, 0.0], [1.0, 3.0, 0.0]]);
+        let names: Vec<_> = group.clone().into_iter().map(|atom| atom.name).collect();
+        assert_eq!(names, vec!["N", "CA"]);
     }
 
     #[test]
