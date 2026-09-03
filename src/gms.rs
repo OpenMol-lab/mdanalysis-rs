@@ -54,11 +54,12 @@ impl GmsFile {
         parse_gms(input)
     }
 
-    /// Read uncompressed GAMESS output from any reader.
+    /// Read GAMESS output from any reader, transparently decompressing gzip or
+    /// bzip2 streams based on their magic bytes.
     pub fn read<R: Read>(mut reader: R) -> Result<Self, GmsError> {
-        let mut input = String::new();
-        reader.read_to_string(&mut input)?;
-        Self::from_str(&input)
+        let mut bytes = Vec::new();
+        reader.read_to_end(&mut bytes)?;
+        Self::from_bytes(&bytes)
     }
 
     /// Parse GAMESS output bytes, transparently decompressing gzip or bzip2
@@ -696,6 +697,7 @@ mod tests {
         std::io::Write::write_all(&mut encoder, &plain).unwrap();
         let bzip = encoder.finish().unwrap();
         assert_eq!(GmsFile::from_bytes(&bzip).unwrap().n_atoms, 6);
+        assert_eq!(GmsFile::read(Cursor::new(&bzip)).unwrap().n_atoms, 6);
         assert_eq!(
             CoordinateFile::from_gms_bytes(&bzip).unwrap().n_frames(),
             21
