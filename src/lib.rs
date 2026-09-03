@@ -26,6 +26,7 @@ pub mod lammps;
 pub mod mdamath;
 pub mod mmtf;
 pub mod neighbor_search;
+pub mod netcdf;
 pub mod pdb;
 pub mod pdbqt;
 pub mod psf;
@@ -105,6 +106,7 @@ pub use neighbor_search::{
     AtomNeighborSearch, NeighborPairs, NeighborSearch, NeighborSearchError, PeriodicKDTree,
     SearchLevel,
 };
+pub use netcdf::{NetcdfData, NetcdfError, NetcdfFile, NetcdfStructure, read_netcdf};
 pub use pdb::{PdbAtom, PdbBond, PdbCryst1, PdbError, PdbStructure, read_pdb, write_pdb};
 pub use pdbqt::{PdbqtAtom, PdbqtError, PdbqtStructure, read_pdbqt, write_pdbqt};
 pub use psf::{PsfAtom, PsfBond, PsfError, PsfStructure, read_psf, write_psf};
@@ -147,6 +149,7 @@ pub enum Error {
     Gsd(gsd::GsdError),
     Trc(trc::TrcError),
     Tpr(tpr::TprError),
+    Netcdf(netcdf::NetcdfError),
     Itp(itp::ItpError),
     HoomdXml(hoomdxml::HoomdXmlError),
     Distance(DistanceError),
@@ -177,6 +180,7 @@ impl std::fmt::Display for Error {
             Self::Gsd(error) => write!(f, "GSD error: {error}"),
             Self::Trc(error) => write!(f, "TRC trajectory error: {error}"),
             Self::Tpr(error) => write!(f, "TPR topology error: {error}"),
+            Self::Netcdf(error) => write!(f, "NetCDF trajectory error: {error}"),
             Self::Itp(error) => write!(f, "ITP error: {error}"),
             Self::HoomdXml(error) => write!(f, "HOOMD XML error: {error}"),
             Self::Distance(error) => write!(f, "distance error: {error}"),
@@ -270,6 +274,12 @@ impl From<CoordinateError> for Error {
 impl From<tpr::TprError> for Error {
     fn from(error: tpr::TprError) -> Self {
         Self::Tpr(error)
+    }
+}
+
+impl From<netcdf::NetcdfError> for Error {
+    fn from(error: netcdf::NetcdfError) -> Self {
+        Self::Netcdf(error)
     }
 }
 
