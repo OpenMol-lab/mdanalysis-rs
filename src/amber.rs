@@ -490,10 +490,11 @@ fn parse_format(format: &str) -> Result<(usize, usize, TopFieldKind), AmberError
     Ok((count, width, kind))
 }
 
-fn parse_section_values<T>(section: &TopSection, parse: impl Fn(&str) -> Option<T>) -> Vec<T> {
-    let Ok((count, width, kind)) = parse_format(&section.format) else {
-        return Vec::new();
-    };
+fn parse_section_values<T>(
+    section: &TopSection,
+    parse: impl Fn(&str) -> Option<T>,
+) -> Result<Vec<T>, AmberError> {
+    let (count, width, kind) = parse_format(&section.format)?;
     let mut values = Vec::new();
     for line in &section.lines {
         let bytes = line.as_bytes();
@@ -504,14 +505,27 @@ fn parse_section_values<T>(section: &TopSection, parse: impl Fn(&str) -> Option<
                 continue;
             }
             let value = std::str::from_utf8(&bytes[start..end]).unwrap_or("").trim();
-            if let Some(parsed) = parse(value)
-                && (!value.is_empty() || !matches!(kind, TopFieldKind::Text))
-            {
-                values.push(parsed);
+            if value.is_empty() {
+                continue;
             }
+            let parsed = parse(value).ok_or_else(|| {
+                let kind_name = match kind {
+                    TopFieldKind::Integer => "integer",
+                    TopFieldKind::Real => "real",
+                    TopFieldKind::Text => "text",
+                };
+                parse_error(
+                    "PRMTOP",
+                    format!(
+                        "invalid {kind_name} value {value:?} in %FORMAT({})",
+                        section.format
+                    ),
+                )
+            })?;
+            values.push(parsed);
         }
     }
-    values
+    Ok(values)
 }
 
 fn parse_section_ints(section: &TopSection) -> Result<Vec<i64>, AmberError> {
@@ -522,9 +536,7 @@ fn parse_section_ints(section: &TopSection) -> Result<Vec<i64>, AmberError> {
             format!("%FORMAT({format}) is not integer"),
         ));
     }
-    Ok(parse_section_values(section, |value| {
-        value.parse::<i64>().ok()
-    }))
+    parse_section_values(section, |value| value.parse::<i64>().ok())
 }
 
 fn parse_section_floats(section: &TopSection) -> Result<Vec<f64>, AmberError> {
@@ -535,9 +547,9 @@ fn parse_section_floats(section: &TopSection) -> Result<Vec<f64>, AmberError> {
             format!("%FORMAT({format}) is not real"),
         ));
     }
-    Ok(parse_section_values(section, |value| {
+    parse_section_values(section, |value| {
         value.replace(['D', 'd'], "E").parse::<f64>().ok()
-    }))
+    })
 }
 
 fn parse_section_strings(section: &TopSection) -> Result<Vec<String>, AmberError> {
@@ -548,9 +560,7 @@ fn parse_section_strings(section: &TopSection) -> Result<Vec<String>, AmberError
             format!("%FORMAT({format}) is not text"),
         ));
     }
-    Ok(parse_section_values(section, |value| {
-        Some(value.to_owned())
-    }))
+    parse_section_values(section, |value| Some(value.to_owned()))
 }
 
 fn required_ints(
@@ -823,9 +833,7 @@ impl Universe {
             .map(|source| {
                 let mut atom = Atom::new(source.index, source.name.clone(), [0.0; 3]);
                 atom.atom_type = Some(source.atom_type.clone());
-                atom.element = source.element.clone().or_else(|| {
-                    crate::guesser::guess_element(&source.name, Some(&source.atom_type), None).ok()
-                });
+                atom.element = source.element.clone();
                 atom.mass = source.mass;
                 atom.charge = source.charge;
                 atom.resid = source.resid;
@@ -1340,6 +1348,19 @@ mod tests {
     }
 
     #[test]
+    fn prmtop_universe_preserves_missing_elements() {
+        let topology = AmberTopFile::read_file(fixture("ache.prmtop")).unwrap();
+        let universe = Universe::from_amber_top_file(topology).unwrap();
+        assert!(
+            universe
+                .topology
+                .atoms
+                .iter()
+                .all(|atom| atom.element.is_none())
+        );
+    }
+
+    #[test]
     fn parses_large_parm7_and_legacy_topology() {
         let parm7 = AmberTopFile::read_file(fixture("tz2.truncoct.parm7.bz2")).unwrap();
         assert_eq!(parm7.n_atoms(), 5827);
@@ -1364,5 +1385,24 @@ mod tests {
         let file = AmberTopFile::from_bytes(&bytes).unwrap();
         assert_eq!(file.n_residues(), 38);
         assert!(file.atoms.iter().all(|atom| atom.segid == "SYSTEM"));
+    }
+
+    #[test]
+    fn rejects_malformed_numeric_section_values() {
+        let section = TopSection {
+            format: "2I4".to_owned(),
+            lines: vec!["   1xxxx".to_owned()],
+        };
+        let error = parse_section_ints(&section).unwrap_err();
+        assert!(error.to_string().contains("invalid integer value"));
+    }
+
+    #[test]
+    fn accepts_trailing_blank_fields_in_numeric_sections() {
+        let section = TopSection {
+            format: "2I4".to_owned(),
+            lines: vec!["   1   ".to_owned()],
+        };
+        assert_eq!(parse_section_ints(&section).unwrap(), vec![1]);
     }
 }
