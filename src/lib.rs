@@ -32,6 +32,7 @@ pub mod psf;
 pub mod selection;
 pub mod topology_groups;
 pub mod transformations;
+pub mod trz;
 pub mod txyz;
 pub mod units;
 pub mod xdr;
@@ -104,6 +105,7 @@ pub use pdb::{PdbAtom, PdbBond, PdbCryst1, PdbError, PdbStructure, read_pdb, wri
 pub use pdbqt::{PdbqtAtom, PdbqtError, PdbqtStructure, read_pdbqt, write_pdbqt};
 pub use psf::{PsfAtom, PsfBond, PsfError, PsfStructure, read_psf, write_psf};
 pub use topology_groups::{AngleValue, BondLength, DihedralValue, TopologyGroupExt};
+pub use trz::{TrzError, TrzFile, TrzHeader, TrzWriteOptions, read_trz, write_trz};
 pub use txyz::{
     ArcFile, TxyzAtom, TxyzBond, TxyzData, TxyzError, TxyzFile, TxyzStructure, read_arc, read_txyz,
     write_arc, write_txyz,
@@ -124,6 +126,7 @@ pub enum Error {
     Pdbqt(pdbqt::PdbqtError),
     Lammps(lammps::LammpsError),
     Txyz(txyz::TxyzError),
+    Trz(trz::TrzError),
     Psf(PsfError),
     Dcd(dcd::DcdError),
     Dms(dms::DmsError),
@@ -151,6 +154,7 @@ impl std::fmt::Display for Error {
             Self::Pdbqt(error) => write!(f, "PDBQT error: {error}"),
             Self::Lammps(error) => write!(f, "LAMMPS DATA error: {error}"),
             Self::Txyz(error) => write!(f, "Tinker XYZ error: {error}"),
+            Self::Trz(error) => write!(f, "TRZ trajectory error: {error}"),
             Self::Psf(error) => write!(f, "PSF error: {error}"),
             Self::Dcd(error) => write!(f, "DCD error: {error}"),
             Self::Dms(error) => write!(f, "DMS error: {error}"),
@@ -211,6 +215,12 @@ impl From<lammps::LammpsError> for Error {
 impl From<txyz::TxyzError> for Error {
     fn from(error: txyz::TxyzError) -> Self {
         Self::Txyz(error)
+    }
+}
+
+impl From<trz::TrzError> for Error {
+    fn from(error: trz::TrzError) -> Self {
+        Self::Trz(error)
     }
 }
 
