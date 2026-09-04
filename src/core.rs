@@ -1686,14 +1686,50 @@ impl Universe {
     }
 
     fn from_xtc_file(file: XtcFile) -> crate::Result<Self> {
-        Self::from_coordinate_file(file.coordinates)
+        if file.n_atoms != file.coordinates.n_atoms() {
+            return Err(crate::Error::InvalidInput(format!(
+                "XTC contains {} atoms, coordinates contain {}",
+                file.n_atoms,
+                file.coordinates.n_atoms()
+            )));
+        }
+        let XtcFile {
+            coordinates,
+            steps,
+            times,
+            ..
+        } = file;
+        let mut universe = Self::from_coordinate_file(coordinates)?;
+        set_xdr_frame_data(&mut universe.trajectory.frames, &steps, &times, None);
+        Ok(universe)
     }
 
     fn from_trr_file(file: TrrFile) -> crate::Result<Self> {
-        let mut universe = Self::from_coordinate_file(file.coordinates)?;
-        for (frame, forces) in universe.trajectory.frames.iter_mut().zip(file.forces) {
+        if file.n_atoms != file.coordinates.n_atoms() {
+            return Err(crate::Error::InvalidInput(format!(
+                "TRR contains {} atoms, coordinates contain {}",
+                file.n_atoms,
+                file.coordinates.n_atoms()
+            )));
+        }
+        let TrrFile {
+            coordinates,
+            steps,
+            times,
+            forces,
+            lambdas,
+            ..
+        } = file;
+        let mut universe = Self::from_coordinate_file(coordinates)?;
+        for (frame, forces) in universe.trajectory.frames.iter_mut().zip(forces) {
             frame.forces = forces;
         }
+        set_xdr_frame_data(
+            &mut universe.trajectory.frames,
+            &steps,
+            &times,
+            Some(&lambdas),
+        );
         Ok(universe)
     }
 
@@ -1705,7 +1741,7 @@ impl Universe {
 
     fn from_psf_and_xtc_file(psf: PsfStructure, xtc: XtcFile) -> crate::Result<Self> {
         let mut universe = Self::from_psf_structure(psf)?;
-        universe.attach_coordinate_file(xtc.coordinates)?;
+        universe.attach_xtc(xtc)?;
         Ok(universe)
     }
 
@@ -1723,7 +1759,7 @@ impl Universe {
 
     fn from_pdb_and_xtc_structures(pdb: PdbStructure, xtc: XtcFile) -> crate::Result<Self> {
         let mut universe = Self::from_pdb_structure(pdb)?;
-        universe.attach_coordinate_file(xtc.coordinates)?;
+        universe.attach_xtc(xtc)?;
         Ok(universe)
     }
 
@@ -1808,11 +1844,38 @@ impl Universe {
                 "TRR coordinate file has no frames".to_owned(),
             ));
         }
-        let forces = trr.forces;
-        self.attach_coordinate_file(trr.coordinates)?;
+        let TrrFile {
+            coordinates,
+            steps,
+            times,
+            forces,
+            lambdas,
+            ..
+        } = trr;
+        self.attach_coordinate_file(coordinates)?;
         for (frame, force) in self.trajectory.frames.iter_mut().zip(forces) {
             frame.forces = force;
         }
+        set_xdr_frame_data(&mut self.trajectory.frames, &steps, &times, Some(&lambdas));
+        Ok(())
+    }
+
+    fn attach_xtc(&mut self, xtc: XtcFile) -> crate::Result<()> {
+        if xtc.n_atoms != self.n_atoms() {
+            return Err(crate::Error::InvalidInput(format!(
+                "XTC contains {} atoms, topology contains {}",
+                xtc.n_atoms,
+                self.n_atoms()
+            )));
+        }
+        let XtcFile {
+            coordinates,
+            steps,
+            times,
+            ..
+        } = xtc;
+        self.attach_coordinate_file(coordinates)?;
+        set_xdr_frame_data(&mut self.trajectory.frames, &steps, &times, None);
         Ok(())
     }
 
@@ -2571,6 +2634,53 @@ impl Universe {
     pub fn positions_mut(&mut self) -> Option<&mut [[f64; 3]]> {
         self.current_frame_mut()
             .map(|frame| frame.positions.as_mut_slice())
+    }
+}
+
+fn set_xdr_frame_data<T>(frames: &mut [Frame], steps: &[i32], times: &[T], lambdas: Option<&[f64]>)
+where
+    T: Copy + Into<f64>,
+{
+    let frame_times = frames
+        .iter()
+        .enumerate()
+        .map(|(index, frame)| {
+            times
+                .get(index)
+                .copied()
+                .map(Into::into)
+                .unwrap_or(frame.time)
+        })
+        .collect::<Vec<_>>();
+
+    for (index, frame) in frames.iter_mut().enumerate() {
+        let step = steps
+            .get(index)
+            .copied()
+            .map(|step| {
+                frame.step = usize::try_from(step).unwrap_or(0);
+                f64::from(step)
+            })
+            .unwrap_or(frame.step as f64);
+        let time = frame_times[index];
+        frame.time = time;
+        let dt = if frame_times.len() < 2 {
+            0.0
+        } else if let Some(next) = frame_times.get(index + 1) {
+            *next - time
+        } else {
+            time - frame_times[index - 1]
+        };
+
+        frame.data.insert("step".to_owned(), vec![step]);
+        frame.data.insert("time".to_owned(), vec![time]);
+        frame.data.insert("dt".to_owned(), vec![dt]);
+        if let Some(lambdas) = lambdas {
+            frame.data.insert(
+                "lambda".to_owned(),
+                vec![lambdas.get(index).copied().unwrap_or(0.0)],
+            );
+        }
     }
 }
 
@@ -3499,6 +3609,10 @@ mod tests {
             universe.current_frame().unwrap().dimensions.unwrap()[..3],
             [2.0, 3.0, 4.0]
         );
+        let xtc_data = &universe.current_frame().unwrap().data;
+        assert_eq!(xtc_data.get("step"), Some(&vec![17.0]));
+        assert!((xtc_data["time"][0] - 2.5).abs() < 1.0e-6);
+        assert_eq!(xtc_data.get("dt"), Some(&vec![0.0]));
 
         let mut trr_coordinate = coordinate;
         trr_coordinate.velocities = Some(vec![[0.1, 0.2, 0.3], [0.4, 0.5, 0.6]]);
@@ -3508,7 +3622,7 @@ mod tests {
             steps: vec![17],
             times: vec![2.5],
             forces: vec![Some(vec![[1.0, 1.1, 1.2], [1.3, 1.4, 1.5]])],
-            lambdas: vec![0.0],
+            lambdas: vec![0.25],
             double_precision: vec![false],
         };
         let trr_bytes = trr
@@ -3521,6 +3635,10 @@ mod tests {
         assert!((force[0] - 1.3).abs() < 1.0e-6);
         assert!((force[1] - 1.4).abs() < 1.0e-6);
         assert!((force[2] - 1.5).abs() < 1.0e-6);
+        assert_eq!(frame.data.get("step"), Some(&vec![17.0]));
+        assert!((frame.data["time"][0] - 2.5).abs() < 1.0e-6);
+        assert_eq!(frame.data.get("dt"), Some(&vec![0.0]));
+        assert!((frame.data["lambda"][0] - 0.25).abs() < 1.0e-6);
     }
 
     #[test]
@@ -3531,13 +3649,20 @@ mod tests {
             "       1 SEG      1 ALA      N        NH1          0.000000      14.007000        0\n",
             "       2 SEG      1 ALA      CA       CT1          0.000000      12.011000        0\n",
         );
-        let coordinate = crate::coordinates::CoordinateFile::new(vec![
-            crate::coordinates::CoordinateFrame::new(vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]]),
-        ]);
+        let mut coordinate_frame =
+            crate::coordinates::CoordinateFrame::new(vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]]);
+        coordinate_frame.step = 23;
+        coordinate_frame.time = 4.5;
+        let coordinate = crate::coordinates::CoordinateFile::new(vec![coordinate_frame]);
         let xtc = coordinate.to_xtc_bytes().unwrap();
         let universe = Universe::from_psf_and_xtc_bytes(psf, &xtc).unwrap();
         assert_eq!(universe.n_atoms(), 2);
         assert_eq!(universe.positions()[1], [1.0, 0.0, 0.0]);
+        assert_eq!(
+            universe.current_frame().unwrap().data.get("step"),
+            Some(&vec![23.0])
+        );
+        assert!((universe.current_frame().unwrap().data["time"][0] - 4.5).abs() < 1.0e-6);
 
         let one_atom = crate::coordinates::CoordinateFile::new(vec![
             crate::coordinates::CoordinateFrame::new(vec![[0.0, 0.0, 0.0]]),
@@ -3545,9 +3670,21 @@ mod tests {
         .to_xtc_bytes()
         .unwrap();
         let error = Universe::from_psf_and_xtc_bytes(psf, &one_atom).unwrap_err();
-        assert!(
-            matches!(error, crate::Error::InvalidInput(message) if message.contains("trajectory contains 1 atoms"))
+        assert!(matches!(error, crate::Error::InvalidInput(message) if
+            message.contains("trajectory contains 1 atoms")
+                || message.contains("XTC contains 1 atoms")));
+
+        let pdb = concat!(
+            "ATOM      1  N   ALA A   1       0.000   0.000   0.000  1.00  0.00           N  \n",
+            "ATOM      2  CA  ALA A   1       1.000   0.000   0.000  1.00  0.00           C  \n",
+            "END\n",
         );
+        let universe = Universe::from_pdb_and_xtc_bytes(pdb, &xtc).unwrap();
+        assert_eq!(
+            universe.current_frame().unwrap().data.get("step"),
+            Some(&vec![23.0])
+        );
+        assert!((universe.current_frame().unwrap().data["time"][0] - 4.5).abs() < 1.0e-6);
     }
 
     #[test]
