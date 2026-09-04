@@ -700,6 +700,9 @@ fn attach_h5md(universe: &mut Universe, file: H5mdFile) -> crate::Result<()> {
             frame.dimensions = source.dimensions;
             frame.step = source.step;
             frame.time = source.time;
+            frame
+                .data
+                .insert("step".to_owned(), vec![source.step as f64]);
             frame.forces = file.forces.get(index).cloned().flatten();
             frame
         })
@@ -747,6 +750,10 @@ mod tests {
         let universe = Universe::from_h5md_bytes(&bytes).unwrap();
         assert_eq!(universe.n_atoms(), 5);
         assert!(universe.current_frame().unwrap().forces.is_some());
+        assert_eq!(
+            universe.current_frame().unwrap().data.get("step"),
+            Some(&vec![0.0])
+        );
     }
 
     #[test]
@@ -793,6 +800,11 @@ mod tests {
         assert!((dimensions[0] - 52.763).abs() < 1e-4);
         assert_eq!(first.step, 0);
         assert_eq!(file.coordinates.frames[2].step, 50_000);
+        let universe = file.to_universe().unwrap();
+        assert_eq!(
+            universe.trajectory.frames[2].data.get("step"),
+            Some(&vec![50_000.0])
+        );
     }
 
     #[test]
