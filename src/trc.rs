@@ -294,6 +294,7 @@ impl From<io::Error> for TrcError {
 struct PendingFrame {
     step: usize,
     time: f64,
+    has_timestep: bool,
     positions: Option<Vec<[f64; 3]>>,
     dimensions: Option<[f64; 6]>,
 }
@@ -346,6 +347,7 @@ fn parse_trc(text: &str) -> Result<TrcFile, TrcError> {
                     parse_error(current_line + 1, format!("invalid step: {error}"))
                 })?;
                 pending.time = parse_float(current_line + 1, fields[1], "time")?;
+                pending.has_timestep = true;
                 saw_supported_block = true;
                 line_index = next;
             }
@@ -441,14 +443,25 @@ fn parse_trc(text: &str) -> Result<TrcFile, TrcError> {
     })
 }
 
-fn finish_frame(pending: &mut PendingFrame, _frame: usize) -> Result<RawFrame, TrcError> {
+fn finish_frame(pending: &mut PendingFrame, frame: usize) -> Result<RawFrame, TrcError> {
     let positions = pending
         .positions
         .take()
         .ok_or_else(|| invalid("frame has no POSITIONRED block"))?;
+    let step = if pending.has_timestep {
+        pending.step
+    } else {
+        frame
+    };
+    let time = if pending.has_timestep {
+        pending.time
+    } else {
+        0.0
+    };
+    pending.has_timestep = false;
     Ok(RawFrame {
-        step: pending.step,
-        time: pending.time,
+        step,
+        time,
         positions,
         dimensions: pending.dimensions.take(),
     })
@@ -682,6 +695,7 @@ mod tests {
         assert_eq!(file.n_atoms(), 73);
         assert_eq!(file.n_frames(), 3);
         assert_eq!(file.coordinates.frames[0].step, 0);
+        assert_eq!(file.coordinates.frames[2].step, 2);
         assert_eq!(file.coordinates.frames[2].time, 0.0);
         assert!((file.coordinates.frames[0].positions[0][0] - 2.373409727).abs() < 1.0e-9);
     }
