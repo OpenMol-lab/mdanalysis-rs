@@ -803,6 +803,9 @@ fn attach_tng(universe: &mut Universe, file: TngFile) -> crate::Result<()> {
                     }
                 }
                 frame
+                    .data
+                    .insert("step".to_owned(), vec![source.step as f64]);
+                frame
             })
             .collect(),
     );
@@ -853,6 +856,10 @@ mod tests {
             universe.trajectory.frames[100]
                 .data
                 .contains_key("ATOM MASSES")
+        );
+        assert_eq!(
+            universe.trajectory.frames[100].data.get("step"),
+            Some(&vec![500_000.0])
         );
     }
 
