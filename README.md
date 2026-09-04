@@ -10,6 +10,22 @@ The crate is under active development. The public API is useful for Rust
 programs today, but it should be treated as pre-1.0 and may change between
 releases.
 
+## Porting status
+
+This project ports functionality from the local MDAnalysis source tree at
+[mdanalysis](https://github.com/MDAnalysis/mdanalysis). The latest upstream commit
+used as the porting reference is:
+
+```text
+b0ba3f53fd148a1ca76ee3d02743072cb690c914
+```
+
+It is the HEAD of the upstream `develop` branch at the time of writing
+(`Add ASV benchmark for XYZ reader`, 2026-07-18). The Rust implementation is
+not an automatic one-to-one translation of every upstream module; see the
+supported-format and API sections below for the functionality currently
+available here.
+
 ## Features
 
 - A common `Universe` model containing `Topology` and `Trajectory` data.
