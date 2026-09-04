@@ -731,6 +731,7 @@ fn dump_trajectory(frames: Vec<LammpsDumpFrame>) -> crate::core::Trajectory {
                 frame.dimensions = source.dimensions;
                 frame.step = source.step;
                 frame.time = source.time;
+                frame.data = source.additional_columns;
                 frame
             })
             .collect(),
@@ -2492,6 +2493,20 @@ mod tests {
         );
         assert_eq!(dump.frames[0].time, 10.0);
         assert_eq!(dump.frames[1].time, 20.0);
+    }
+
+    #[test]
+    fn universe_dump_constructor_preserves_additional_columns() {
+        let dump = LammpsDumpFile::from_str(DUMP).unwrap();
+        let universe = crate::core::Universe::from_lammps_dump_file(dump).unwrap();
+        assert_eq!(
+            universe.trajectory.frames[0].data.get("foo"),
+            Some(&vec![9.0, 8.0])
+        );
+        assert_eq!(
+            universe.trajectory.frames[1].data.get("foo"),
+            Some(&vec![10.0, 11.0])
+        );
     }
 
     #[test]
