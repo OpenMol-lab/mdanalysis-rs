@@ -378,6 +378,13 @@ impl Universe {
         }
         let TrzFile {
             coordinates,
+            steps,
+            pressure,
+            pressure_tensor,
+            total_energy,
+            potential_energy,
+            kinetic_energy,
+            temperature,
             forces,
             ..
         } = file;
@@ -388,6 +395,38 @@ impl Universe {
             frame.dimensions = coordinate.dimensions;
             frame.time = coordinate.time;
             frame.step = coordinate.step;
+            frame.data.insert(
+                "frame".to_owned(),
+                vec![f64::from(steps.get(index).copied().unwrap_or(0))],
+            );
+            frame.data.insert(
+                "pressure".to_owned(),
+                vec![pressure.get(index).copied().unwrap_or(0.0)],
+            );
+            frame.data.insert(
+                "pressure_tensor".to_owned(),
+                pressure_tensor
+                    .get(index)
+                    .copied()
+                    .unwrap_or([0.0; 6])
+                    .to_vec(),
+            );
+            frame.data.insert(
+                "total_energy".to_owned(),
+                vec![total_energy.get(index).copied().unwrap_or(0.0)],
+            );
+            frame.data.insert(
+                "potential_energy".to_owned(),
+                vec![potential_energy.get(index).copied().unwrap_or(0.0)],
+            );
+            frame.data.insert(
+                "kinetic_energy".to_owned(),
+                vec![kinetic_energy.get(index).copied().unwrap_or(0.0)],
+            );
+            frame.data.insert(
+                "temperature".to_owned(),
+                vec![temperature.get(index).copied().unwrap_or(0.0)],
+            );
             if let Some(force) = forces.get(index).cloned().flatten() {
                 frame.forces = Some(force);
             }
@@ -1022,6 +1061,15 @@ mod tests {
         assert_eq!(parsed.coordinates.frames[0].positions.len(), 2);
         assert!(parsed.forces[0].is_some());
         assert!((parsed.coordinates.frames[0].positions[0][0] - 1.25).abs() < 1.0e-6);
+        let universe = Universe::from_trz_file(parsed).unwrap();
+        let data = &universe.trajectory.frames[0].data;
+        assert_eq!(data["frame"], vec![4.0]);
+        assert_eq!(data["pressure"], vec![1.0]);
+        assert_eq!(data["pressure_tensor"], vec![1.0; 6]);
+        assert_eq!(data["total_energy"], vec![2.0]);
+        assert_eq!(data["potential_energy"], vec![3.0]);
+        assert_eq!(data["kinetic_energy"], vec![4.0]);
+        assert_eq!(data["temperature"], vec![5.0]);
     }
 
     #[test]
