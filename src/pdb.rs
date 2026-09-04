@@ -113,6 +113,9 @@ pub type PdbCrystal = PdbCryst1;
 pub struct PdbStructure {
     pub atoms: Vec<PdbAtom>,
     pub frames: Vec<Vec<[f64; 3]>>,
+    /// Per-frame atom records, including occupancy and temperature-factor
+    /// values that may vary between MODEL records.
+    pub frame_atoms: Vec<Vec<PdbAtom>>,
     pub cryst1: Option<PdbCryst1>,
     /// Connectivity records in atom-serial-number space.
     pub bonds: Vec<PdbBond>,
@@ -153,15 +156,20 @@ impl PdbStructure {
         self.frame(0)
     }
 
-    /// Return atoms for a frame, combining its coordinates with first-frame
-    /// metadata.
+    /// Return atoms for a frame, combining its coordinates with that frame's
+    /// metadata when available.
     pub fn atoms_for_frame(&self, index: usize) -> Option<Vec<PdbAtom>> {
         let frame = self.frames.get(index)?;
         if frame.len() != self.atoms.len() {
             return None;
         }
+        let metadata = self
+            .frame_atoms
+            .get(index)
+            .filter(|atoms| atoms.len() == frame.len())
+            .map_or(self.atoms.as_slice(), Vec::as_slice);
         Some(
-            self.atoms
+            metadata
                 .iter()
                 .zip(frame.iter().copied())
                 .map(|(atom, position)| atom.with_position(position))
@@ -195,16 +203,19 @@ impl PdbStructure {
             }
             1 => {
                 validate_frame(self, 0)?;
-                for (atom, position) in self.atoms.iter().zip(self.frames[0].iter().copied()) {
-                    writeln!(writer, "{}", format_atom(&atom.with_position(position)))?;
+                for atom in self.atoms_for_frame(0).expect("validated PDB atom count") {
+                    writeln!(writer, "{}", format_atom(&atom))?;
                 }
             }
             _ => {
-                for (index, frame) in self.frames.iter().enumerate() {
+                for (index, _frame) in self.frames.iter().enumerate() {
                     validate_frame(self, index)?;
                     writeln!(writer, "MODEL{:>9}", index + 1)?;
-                    for (atom, position) in self.atoms.iter().zip(frame.iter().copied()) {
-                        writeln!(writer, "{}", format_atom(&atom.with_position(position)))?;
+                    for atom in self
+                        .atoms_for_frame(index)
+                        .expect("validated PDB atom count")
+                    {
+                        writeln!(writer, "{}", format_atom(&atom))?;
                     }
                     writeln!(writer, "ENDMDL")?;
                 }
@@ -277,11 +288,19 @@ impl PdbStructure {
                     }
                 }
                 "MODEL" => {
-                    if model_atoms.is_some() {
-                        return Err(PdbError::Parse {
-                            line: line_number,
-                            message: "nested MODEL record".to_string(),
-                        });
+                    if let Some(current) = model_atoms.take() {
+                        // A few real-world trajectories omit ENDMDL between
+                        // consecutive MODEL records.  Treat the next MODEL
+                        // as the implicit terminator when the current model
+                        // contains atoms; an empty nested MODEL remains
+                        // malformed.
+                        if current.is_empty() {
+                            return Err(PdbError::Parse {
+                                line: line_number,
+                                message: "nested MODEL record".to_string(),
+                            });
+                        }
+                        models.push(current);
                     }
                     saw_model = true;
                     previous_serial = None;
@@ -328,14 +347,16 @@ impl PdbStructure {
                     });
                 }
             }
-            atoms = models[0].clone();
-            let frames = models
-                .into_iter()
-                .map(|model| model.into_iter().map(|atom| atom.position()).collect())
+            let frame_atoms = models;
+            atoms = frame_atoms[0].clone();
+            let frames = frame_atoms
+                .iter()
+                .map(|model| model.iter().map(PdbAtom::position).collect())
                 .collect();
             Ok(Self {
                 atoms,
                 frames,
+                frame_atoms,
                 cryst1,
                 bonds,
             })
@@ -345,9 +366,11 @@ impl PdbStructure {
             } else {
                 vec![atoms.iter().map(PdbAtom::position).collect()]
             };
+            let frame_atoms = Vec::new();
             Ok(Self {
                 atoms,
                 frames,
+                frame_atoms,
                 cryst1,
                 bonds,
             })
@@ -900,6 +923,32 @@ mod tests {
             [7.0, 8.0, 9.0]
         );
         assert_eq!(structure.atoms_for_frame(1).expect("atoms")[0].x, 7.0);
+    }
+
+    #[test]
+    fn accepts_models_without_endmdl_before_next_model_or_eof() {
+        let input = concat!(
+            "MODEL        1\n",
+            "ATOM      1  CA  GLY A   1      1.000   2.000   3.000  1.00 10.00           C  \n",
+            "MODEL        2\n",
+            "ATOM      1  CA  GLY A   1      7.000   8.000   9.000  0.50 20.00           C  \n",
+        );
+        let structure = PdbStructure::from_str(input).expect("valid models");
+        assert_eq!(structure.num_frames(), 2);
+        assert_eq!(structure.atoms_for_frame(1).unwrap().len(), 1);
+        assert_eq!(
+            structure.atoms_for_frame(1).unwrap()[0].occupancy,
+            Some(0.5)
+        );
+    }
+
+    #[test]
+    fn rejects_empty_nested_models() {
+        let input = concat!("MODEL        1\n", "MODEL        2\n", "ENDMDL\n");
+        let error = PdbStructure::from_str(input).expect_err("nested model");
+        assert!(
+            matches!(error, PdbError::Parse { message, .. } if message == "nested MODEL record")
+        );
     }
 
     #[test]

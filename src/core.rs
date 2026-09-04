@@ -1298,6 +1298,7 @@ impl Universe {
         let PdbStructure {
             atoms: pdb_atoms,
             frames: pdb_frames,
+            frame_atoms: pdb_frame_atoms,
             cryst1,
             bonds: pdb_bonds,
         } = structure;
@@ -1306,6 +1307,7 @@ impl Universe {
             .enumerate()
             .map(|(index, atom)| (atom.serial, index))
             .collect();
+        let trajectory_frames = pdb_trajectory_frames(pdb_frames, &pdb_frame_atoms, &pdb_atoms);
         // Match MDAnalysis' structure-wide fallback: chain IDs supply
         // segment IDs only when the PDB has no segment field populated at
         // all. Mixed files preserve blank segment IDs as blank values.
@@ -1320,18 +1322,8 @@ impl Universe {
             })
             .collect();
         let mut universe = Self::from_atoms(atoms);
-        if !pdb_frames.is_empty() {
-            universe.trajectory = Trajectory::new(
-                pdb_frames
-                    .into_iter()
-                    .enumerate()
-                    .map(|(step, positions)| {
-                        let mut frame = Frame::new(positions);
-                        frame.step = step;
-                        frame
-                    })
-                    .collect(),
-            );
+        if !trajectory_frames.is_empty() {
+            universe.trajectory = Trajectory::new(trajectory_frames);
         }
         for bond in pdb_bonds {
             if let (Some(&atom1), Some(&atom2)) = (
@@ -1962,30 +1954,31 @@ impl Universe {
 
     fn from_psf_and_pdb_structures(psf: PsfStructure, pdb: PdbStructure) -> crate::Result<Self> {
         let mut universe = Self::from_psf_structure(psf)?;
-        if pdb.atoms.len() != universe.n_atoms() {
+        let PdbStructure {
+            atoms: pdb_atoms,
+            frames: pdb_frames,
+            frame_atoms: pdb_frame_atoms,
+            cryst1,
+            ..
+        } = pdb;
+        if pdb_atoms.len() != universe.n_atoms() {
             return Err(crate::Error::InvalidInput(format!(
                 "PDB contains {} atoms, PSF contains {}",
-                pdb.atoms.len(),
+                pdb_atoms.len(),
                 universe.n_atoms()
             )));
         }
-        if pdb.frames.is_empty() {
+        if pdb_frames.is_empty() {
             return Err(crate::Error::InvalidInput(
                 "PDB coordinate file has no frames".to_string(),
             ));
         }
-        universe.trajectory = Trajectory::new(
-            pdb.frames
-                .into_iter()
-                .enumerate()
-                .map(|(step, positions)| {
-                    let mut frame = Frame::new(positions);
-                    frame.step = step;
-                    frame
-                })
-                .collect(),
-        );
-        if let Some(cell) = pdb.cryst1 {
+        universe.trajectory = Trajectory::new(pdb_trajectory_frames(
+            pdb_frames,
+            &pdb_frame_atoms,
+            &pdb_atoms,
+        ));
+        if let Some(cell) = cryst1 {
             let dimensions = [cell.a, cell.b, cell.c, cell.alpha, cell.beta, cell.gamma];
             for frame in &mut universe.trajectory.frames {
                 frame.dimensions = Some(dimensions);
@@ -2033,7 +2026,7 @@ impl Universe {
                     .map(|atom| atom.position)
                     .collect()
             });
-        let atoms = self
+        let atoms: Vec<PdbAtom> = self
             .topology
             .atoms
             .iter()
@@ -2066,6 +2059,35 @@ impl Universe {
             .iter()
             .map(|frame| frame.positions.clone())
             .collect();
+        let frame_atoms = self
+            .trajectory
+            .frames
+            .iter()
+            .map(|frame| {
+                let occupancies = frame.data.get("occupancy");
+                let tempfactors = frame.data.get("tempfactor");
+                atoms
+                    .iter()
+                    .enumerate()
+                    .map(|(index, atom)| {
+                        let mut pdb_atom = atom.clone();
+                        if let Some(occupancy) = occupancies.and_then(|values| values.get(index)) {
+                            pdb_atom.occupancy = Some(*occupancy);
+                        }
+                        if let Some(tempfactor) = tempfactors.and_then(|values| values.get(index)) {
+                            pdb_atom.temperature_factor = Some(*tempfactor);
+                        } else if occupancies.is_some() && tempfactors.is_none() {
+                            // PDB frames omit the tempfactor data block when
+                            // every value is blank. Preserve that per-frame
+                            // absence instead of falling back to the first
+                            // topology frame's value.
+                            pdb_atom.temperature_factor = None;
+                        }
+                        pdb_atom
+                    })
+                    .collect()
+            })
+            .collect();
         let cryst1 = self
             .trajectory
             .frames
@@ -2084,6 +2106,7 @@ impl Universe {
         PdbStructure {
             atoms,
             frames,
+            frame_atoms,
             cryst1,
             bonds: self
                 .topology
@@ -2635,6 +2658,46 @@ impl Universe {
         self.current_frame_mut()
             .map(|frame| frame.positions.as_mut_slice())
     }
+}
+
+fn pdb_trajectory_frames(
+    positions: Vec<Vec<[f64; 3]>>,
+    frame_atoms: &[Vec<PdbAtom>],
+    fallback_atoms: &[PdbAtom],
+) -> Vec<Frame> {
+    positions
+        .into_iter()
+        .enumerate()
+        .map(|(step, positions)| {
+            let mut frame = Frame::new(positions);
+            frame.step = step;
+            let source_atoms = frame_atoms
+                .get(step)
+                .filter(|atoms| atoms.len() == frame.positions.len())
+                .map_or(fallback_atoms, Vec::as_slice);
+            let mut tempfactors = Vec::with_capacity(source_atoms.len());
+            let mut saw_tempfactor = false;
+            frame.data.insert(
+                "occupancy".to_owned(),
+                source_atoms
+                    .iter()
+                    .map(|atom| atom.occupancy.unwrap_or(0.0))
+                    .collect(),
+            );
+            for atom in source_atoms {
+                if let Some(value) = atom.temp_factor() {
+                    saw_tempfactor = true;
+                    tempfactors.push(value);
+                } else {
+                    tempfactors.push(1.0);
+                }
+            }
+            if saw_tempfactor {
+                frame.data.insert("tempfactor".to_owned(), tempfactors);
+            }
+            frame
+        })
+        .collect()
 }
 
 fn set_xdr_frame_data<T>(frames: &mut [Frame], steps: &[i32], times: &[T], lambdas: Option<&[f64]>)
@@ -3304,8 +3367,8 @@ mod tests {
             "ATOM      2  CA  ALA A   7       2.000   2.000   3.000  1.00 20.00           C  \n",
             "ENDMDL\n",
             "MODEL        2\n",
-            "ATOM      1  N   ALA A   7       4.000   5.000   6.000  1.00 20.00           N  \n",
-            "ATOM      2  CA  ALA A   7       5.000   5.000   6.000  1.00 20.00           C  \n",
+            "ATOM      1  N   ALA A   7       4.000   5.000   6.000  0.50 21.00           N  \n",
+            "ATOM      2  CA  ALA A   7       5.000   5.000   6.000  0.75 22.00           C  \n",
             "ENDMDL\n",
         );
         let mut universe = Universe::from_psf_and_pdb_str(psf, pdb).unwrap();
@@ -3319,6 +3382,33 @@ mod tests {
         assert_eq!(universe.topology.atoms[0].charge, -0.3);
         assert_eq!(universe.topology.bonds, vec![Bond::new(0, 1)]);
         assert_eq!(universe.positions()[0], [1.0, 2.0, 3.0]);
+        assert_eq!(
+            universe.trajectory.frame(1).unwrap().data.get("occupancy"),
+            Some(&vec![0.5, 0.75])
+        );
+        assert_eq!(
+            universe.trajectory.frame(1).unwrap().data.get("tempfactor"),
+            Some(&vec![21.0, 22.0])
+        );
+        let output = std::env::temp_dir().join(format!(
+            "mdanalysis-rs-psf-pdb-varying-{}-{}.pdb",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        universe.write_pdb(&output).unwrap();
+        let reparsed = Universe::from_pdb(&output).unwrap();
+        let _ = std::fs::remove_file(output);
+        assert_eq!(
+            reparsed.trajectory.frame(0).unwrap().data.get("occupancy"),
+            Some(&vec![1.0, 1.0])
+        );
+        assert_eq!(
+            reparsed.trajectory.frame(1).unwrap().data.get("tempfactor"),
+            Some(&vec![21.0, 22.0])
+        );
         universe.set_frame(1).unwrap();
         assert_eq!(universe.positions()[0], [4.0, 5.0, 6.0]);
     }
@@ -3499,6 +3589,87 @@ mod tests {
         let reparsed = Universe::from_pdb(&output).expect("read written PDB");
         let _ = std::fs::remove_file(output);
         assert_eq!(reparsed.topology.atoms[0].segid, "SYSTEM");
+    }
+
+    #[test]
+    fn pdb_varying_occupancy_and_tempfactor_are_frame_data() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../mdanalysis/testsuite/MDAnalysisTests/data/varying_occ_tmp.pdb");
+        let universe = Universe::from_pdb(&path).expect("valid varying PDB fixture");
+        assert_eq!(universe.n_frames(), 3);
+
+        let expected_occupancy = [[1.0, 0.0], [0.9, 0.0], [0.0, 0.0]];
+        let expected_tempfactor = [[23.44, 1.0], [24.44, 23.44], [1.0, 23.44]];
+        for frame_index in 0..3 {
+            let frame = universe.trajectory.frame(frame_index).expect("frame");
+            assert_eq!(
+                frame.data.get("occupancy").map(Vec::as_slice),
+                Some(expected_occupancy[frame_index].as_slice())
+            );
+            assert_eq!(
+                frame.data.get("tempfactor").map(Vec::as_slice),
+                Some(expected_tempfactor[frame_index].as_slice())
+            );
+        }
+
+        let output = std::env::temp_dir().join(format!(
+            "mdanalysis-rs-pdb-varying-{}-{}.pdb",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        universe.write_pdb(&output).expect("write varying PDB");
+        let reparsed = Universe::from_pdb(&output).expect("read written varying PDB");
+        let _ = std::fs::remove_file(output);
+        for frame_index in 0..3 {
+            let frame = reparsed
+                .trajectory
+                .frame(frame_index)
+                .expect("reparsed frame");
+            assert_eq!(
+                frame.data.get("occupancy").map(Vec::as_slice),
+                Some(expected_occupancy[frame_index].as_slice())
+            );
+            assert_eq!(
+                frame.data.get("tempfactor").map(Vec::as_slice),
+                Some(expected_tempfactor[frame_index].as_slice())
+            );
+        }
+    }
+
+    #[test]
+    fn pdb_writer_preserves_all_blank_tempfactor_frames() {
+        let pdb = concat!(
+            "MODEL        1\n",
+            "ATOM      1  N   ALA A   1       1.000   2.000   3.000  1.00 20.00           N  \n",
+            "ENDMDL\n",
+            "MODEL        2\n",
+            "ATOM      1  N   ALA A   1       4.000   5.000   6.000  0.50             N  \n",
+            "ENDMDL\n",
+        );
+        let universe = Universe::from_pdb_str(pdb).expect("valid PDB");
+        assert_eq!(
+            universe.trajectory.frame(1).unwrap().data.get("tempfactor"),
+            None
+        );
+
+        let output = std::env::temp_dir().join(format!(
+            "mdanalysis-rs-pdb-blank-tempfactor-{}-{}.pdb",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        universe.write_pdb(&output).expect("write PDB");
+        let reparsed = Universe::from_pdb(&output).expect("read written PDB");
+        let _ = std::fs::remove_file(output);
+        assert_eq!(
+            reparsed.trajectory.frame(1).unwrap().data.get("tempfactor"),
+            None
+        );
     }
 
     #[test]
