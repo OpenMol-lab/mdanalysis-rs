@@ -190,6 +190,10 @@ impl Universe {
                 frame.step = source.step;
                 frame.time = source.time;
                 frame
+                    .data
+                    .insert("step".to_owned(), vec![source.step as f64]);
+                frame.data.insert("time".to_owned(), vec![source.time]);
+                frame
             })
             .collect();
         Ok(Self {
@@ -245,6 +249,10 @@ fn attach_trc(mut universe: Universe, file: TrcFile) -> crate::Result<Universe> 
             frame.dimensions = source.dimensions;
             frame.step = source.step;
             frame.time = source.time;
+            frame
+                .data
+                .insert("step".to_owned(), vec![source.step as f64]);
+            frame.data.insert("time".to_owned(), vec![source.time]);
             frame
         })
         .collect();
@@ -615,6 +623,18 @@ mod tests {
         assert_eq!(universe.n_atoms(), 73);
         assert_eq!(universe.n_frames(), 3);
         assert_eq!(universe.trajectory.frames[0].time, 0.0);
+        assert_eq!(
+            universe.trajectory.frames[0].data.get("step"),
+            Some(&vec![0.0])
+        );
+        assert_eq!(
+            universe.trajectory.frames[2].data.get("step"),
+            Some(&vec![20000.0])
+        );
+        assert_eq!(
+            universe.trajectory.frames[2].data.get("time"),
+            Some(&vec![40.0])
+        );
     }
 
     #[test]
@@ -637,6 +657,10 @@ mod tests {
         assert_eq!(universe.n_frames(), 6);
         assert!(!universe.topology.bonds.is_empty());
         assert_eq!(universe.trajectory.frames[4].step, 10000);
+        assert_eq!(
+            universe.trajectory.frames[4].data.get("step"),
+            Some(&vec![10000.0])
+        );
     }
 
     #[test]
