@@ -1817,6 +1817,7 @@ impl Universe {
     }
 
     fn from_format_structure(structure: Structure) -> crate::Result<Self> {
+        let dimensions = structure.dimensions;
         let mut atoms = Vec::with_capacity(structure.atoms.len());
         for (index, source) in structure.atoms.iter().enumerate() {
             let mut atom = Atom::new(index, source.name.clone(), source.position());
@@ -1855,7 +1856,13 @@ impl Universe {
                 topology.add_bond(topology_bond);
             }
         }
-        Ok(Self::new(topology))
+        let mut universe = Self::new(topology);
+        if let Some(dimensions) = dimensions
+            && let Some(frame) = universe.trajectory.frames.first_mut()
+        {
+            frame.dimensions = Some(dimensions);
+        }
+        Ok(universe)
     }
 
     fn from_psf_structure(psf: PsfStructure) -> crate::Result<Self> {
@@ -2125,6 +2132,7 @@ impl Universe {
                 .collect(),
             title: String::new(),
             bonds: Vec::new(),
+            dimensions: None,
         };
         crate::formats::write_pqr(path, &structure)?;
         Ok(())
@@ -2174,6 +2182,7 @@ impl Universe {
             atoms,
             bonds,
             title: "mdanalysis-rs".to_owned(),
+            dimensions: self.current_frame().and_then(|frame| frame.dimensions),
         };
         crate::formats::write_mol2(path, &structure)?;
         Ok(())
@@ -2208,6 +2217,7 @@ impl Universe {
                 .collect(),
             bonds: Vec::new(),
             title: "mdanalysis-rs".to_owned(),
+            dimensions: None,
         };
         crate::formats::write_crd(path, &structure)?;
         Ok(())
@@ -3019,6 +3029,41 @@ mod tests {
         assert_eq!(reparsed.topology.bonds[0].atom1, 0);
         assert_eq!(reparsed.topology.bonds[0].atom2, 1);
         assert_eq!(reparsed.topology.bonds[0].order, Some(1));
+    }
+
+    #[test]
+    fn mol2_crysin_dimensions_attach_to_and_write_from_universe() {
+        let input = concat!(
+            "@<TRIPOS>MOLECULE\n",
+            "cell\n",
+            "1 0 0 0 0\n",
+            "SMALL\n",
+            "USER_CHARGES\n",
+            "@<TRIPOS>ATOM\n",
+            "1 C 0 0 0 C.3 1 ALA 0\n",
+            "@<TRIPOS>CRYSIN\n",
+            "40 50 60 90 90 90 1 1\n",
+        );
+        let universe = Universe::from_mol2_str(input).expect("valid MOL2");
+        assert_eq!(
+            universe.current_frame().and_then(|frame| frame.dimensions),
+            Some([40.0, 50.0, 60.0, 90.0, 90.0, 90.0])
+        );
+        let output = std::env::temp_dir().join(format!(
+            "mdanalysis-rs-mol2-cell-{}-{}.mol2",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock")
+                .as_nanos()
+        ));
+        universe.write_mol2(&output).expect("write MOL2");
+        let reparsed = Universe::from_mol2(&output).expect("read written MOL2");
+        let _ = std::fs::remove_file(output);
+        assert_eq!(
+            reparsed.current_frame().and_then(|frame| frame.dimensions),
+            Some([40.0, 50.0, 60.0, 90.0, 90.0, 90.0])
+        );
     }
 
     #[test]

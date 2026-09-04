@@ -123,6 +123,9 @@ pub struct Structure {
     pub bonds: Vec<FormatBond>,
     /// Optional title (MOL2 molecule title or CRD title).
     pub title: String,
+    /// Optional unit-cell dimensions as `[a, b, c, alpha, beta, gamma]`.
+    /// MOL2 stores these in its `@<TRIPOS>CRYSIN` section.
+    pub dimensions: Option<[f64; 6]>,
 }
 
 impl Structure {
@@ -420,6 +423,7 @@ fn parse_mol2(input: &str) -> Result<Structure, FormatError> {
         Molecule,
         Atom,
         Bond,
+        CrysIn,
         Other,
     }
     let mut section = Section::None;
@@ -440,6 +444,7 @@ fn parse_mol2(input: &str) -> Result<Structure, FormatError> {
                 "MOLECULE" => Section::Molecule,
                 "ATOM" => Section::Atom,
                 "BOND" => Section::Bond,
+                "CRYSIN" => Section::CrysIn,
                 _ => Section::Other,
             };
             continue;
@@ -521,6 +526,31 @@ fn parse_mol2(input: &str) -> Result<Structure, FormatError> {
                     atom2: parse_token(tokens[2], "second atom id", "MOL2", line_number)?,
                     bond_type: tokens[3].to_owned(),
                 });
+            }
+            Section::CrysIn => {
+                let tokens: Vec<&str> = line.split_whitespace().collect();
+                if tokens.len() < 6 {
+                    return Err(parse_error(
+                        "MOL2",
+                        line_number,
+                        "CRYSIN record requires six unit-cell values",
+                    ));
+                }
+                let mut dimensions = [0.0_f64; 6];
+                for (index, value) in dimensions.iter_mut().enumerate() {
+                    *value = parse_token(tokens[index], "unit-cell value", "MOL2", line_number)?;
+                }
+                if dimensions
+                    .iter()
+                    .any(|value| !value.is_finite() || *value <= 0.0)
+                {
+                    return Err(parse_error(
+                        "MOL2",
+                        line_number,
+                        "unit-cell values must be finite and positive",
+                    ));
+                }
+                structure.dimensions = Some(dimensions);
             }
             Section::None | Section::Other => {}
         }
@@ -619,6 +649,20 @@ fn write_mol2_document<W: Write>(structure: &Structure, mut writer: W) -> Result
                 bond.atom1, bond.atom2, bond.bond_type
             )?;
         }
+    }
+    if let Some(dimensions) = structure.dimensions {
+        writeln!(writer)?;
+        writeln!(writer, "@<TRIPOS>CRYSIN")?;
+        writeln!(
+            writer,
+            "{:.4} {:.4} {:.4} {:.4} {:.4} {:.4} 1 1",
+            dimensions[0],
+            dimensions[1],
+            dimensions[2],
+            dimensions[3],
+            dimensions[4],
+            dimensions[5]
+        )?;
     }
     Ok(())
 }
@@ -867,6 +911,29 @@ mod tests {
         let reparsed = Structure::from_mol2_str(&output).expect("round trip");
         assert_eq!(reparsed.bonds, structure.bonds);
         assert_eq!(reparsed.atoms[0].charge, Some(-0.8));
+    }
+
+    #[test]
+    fn mol2_crysin_round_trip_preserves_dimensions() {
+        let input = concat!(
+            "@<TRIPOS>MOLECULE\n",
+            "cell\n",
+            "1 0 0 0 0\n",
+            "SMALL\n",
+            "USER_CHARGES\n",
+            "@<TRIPOS>ATOM\n",
+            "1 C 0 0 0 C.3 1 ALA 0\n",
+            "@<TRIPOS>CRYSIN\n",
+            "40 50 60 90 90 90 1 1\n",
+        );
+        let structure = Structure::from_mol2_str(input).expect("valid MOL2");
+        assert_eq!(
+            structure.dimensions,
+            Some([40.0, 50.0, 60.0, 90.0, 90.0, 90.0])
+        );
+        let reparsed =
+            Structure::from_mol2_str(&structure.to_mol2_string().unwrap()).expect("round trip");
+        assert_eq!(reparsed.dimensions, structure.dimensions);
     }
 
     #[test]
